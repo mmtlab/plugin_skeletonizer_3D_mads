@@ -74,6 +74,9 @@ find_package(MPI REQUIRED)
 
 find_package(PCL 1.13 REQUIRED)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBCAMERA REQUIRED libcamera)
+
 include(FetchContent)
 
 # pugg is for the plugin system
@@ -103,7 +106,14 @@ FetchContent_Declare(plugin
   GIT_TAG        HEAD
   GIT_SHALLOW    TRUE
 )
-FetchContent_MakeAvailable(pugg json eigen)
+
+FetchContent_Declare(LCCV
+  GIT_REPOSITORY https://github.com/pbosetti/LCCV.git
+  GIT_TAG        HEAD
+  GIT_SHALLOW    TRUE
+)
+
+FetchContent_MakeAvailable(pugg json eigen LCCV)
 FetchContent_Populate(plugin)
 
 include_directories(${plugin_SOURCE_DIR}/src)
@@ -178,6 +188,8 @@ include_directories(
   ${COMMON}/monitors/include
   ${COMMON}/pipelines/include
   ${COMMON}/utils/include
+  ${lccv_SOURCE_DIR}/include
+  ${LIBCAMERA_INCLUDE_DIRS}
 )
 
 if(WIN32)
@@ -202,7 +214,7 @@ if(k4a_FOUND AND k4abt_FOUND AND NOT SKIP_KINECT_AZURE)
   add_plugin(hpe LIBS ${OpenCV_LIBS} ${PCL_LIBRARIES} common openvino::runtime Eigen3::Eigen k4a::k4a k4a::k4abt )
   target_compile_definitions(skeletonizer3D PRIVATE KINECT_AZURE)
 else()
-  add_plugin(hpe LIBS ${OpenCV_LIBS} ${PCL_LIBRARIES} common openvino::runtime Eigen3::Eigen)
+  add_plugin(hpe LIBS ${OpenCV_LIBS} ${PCL_LIBRARIES} common openvino::runtime Eigen3::Eigen lccv_static ${LIBCAMERA_LINK_LIBRARIES})
 endif()
 
 # Download OpenPOSE models #####################################################

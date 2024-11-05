@@ -35,6 +35,7 @@
 #include <pipelines/async_pipeline.h>
 #include <pipelines/metadata.h>
 #include <utils/common.hpp>
+#include <lccv.hpp> // for Raspi
 
 
 // Define the name of the plugin
@@ -202,7 +203,11 @@ public:
   // Destructor
   ~HpePlugin()
   {
-    _cap.release();
+    if (is_raspberry_pi()) {
+      _camera.stopVideo();
+     } else {
+      _cap.release();
+    }
 #ifdef KINECT_AZURE
 
 #endif
@@ -231,6 +236,17 @@ public:
                           _core);
     _frame_num = _pipeline->submitData(
         ImageInputData(_rgb), make_shared<ImageMetaData>(_rgb, _start_time));
+  }
+
+   bool is_raspberry_pi() {
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    while (std::getline(cpuinfo, line)) {
+        if (line.find("Raspberry Pi") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
   }
 
   /* COMMON METHODS ***********************************************************/
@@ -295,17 +311,38 @@ public:
       cvtColor(_rgb, _rgb, cv::COLOR_BGRA2BGR);
     }
 #else
-    // setup video capture
-    _cap.open(_camera_device);
-    if (!_cap.isOpened())
-    {
-      throw invalid_argument("ERROR: Cannot open the video camera");
+    if (is_raspberry_pi()) {
+      std::cout << "It is running on a Raspi" << std::endl;
+      _camera.options->video_width=1280; //640;
+      _camera.options->video_height=720; //480;
+      _camera.options->framerate = 25;
+      _camera.options->verbose = false;
+      _camera.startVideo();
+
+      do {
+        if (!_camera.getVideoFrame(_rgb, 100)) {
+            std::cout << "Waiting for video frame..." << std::endl;
+        }
+      } while (_rgb.empty()); 
+
+      //while (!_camera.getVideoFrame(_rgb, 100)) {
+      //  cout << "Waiting for video frame..." << endl;
+      //}
+    } else {
+      // setup video capture
+      _cap.open(_camera_device);
+      if (!_cap.isOpened())
+      {
+        throw invalid_argument("ERROR: Cannot open the video camera");
+      }
+      _cap >> _rgb;
     }
-    _cap >> _rgb;
 
 #endif
     _start_time = chrono::steady_clock::now();
     cv::Size resolution = _rgb.size();
+    std::cout << "Frame resolution: " << resolution.width << "x" << resolution.height << std::endl;
+
     size_t found = _resolution_rgb.find("x");
     if (found != string::npos)
     {
@@ -316,8 +353,7 @@ public:
 
       _output_transform = OutputTransform(_rgb.size(), resolution);
       resolution = _output_transform.computeResolution();
-
-      cv::resize(_rgb, _rgb, cv::Size(resolution.width, resolution.height));
+      cv::resize(_rgb, _rgb, cv::Size(resolution.width, resolution.height)); 
     }
 
     _rgb_height = resolution.height; //_rgb.rows;
@@ -568,7 +604,11 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 
 
 #else
-      _cap >> _rgb;
+      if (is_raspberry_pi()) {
+        _camera.getVideoFrame(_rgb, 100);
+      }else{ 
+        _cap >> _rgb;
+      }
 #endif
 
       if (_rgb.empty())
@@ -576,7 +616,9 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
         // Input stream is over
         return return_type::error;
       }
-      cv::resize(_rgb, _rgb, cv::Size(_rgb_width, _rgb_height));
+      if (!is_raspberry_pi()) {
+        cv::resize(_rgb, _rgb, cv::Size(_rgb_width, _rgb_height));
+      }
     }
     _start_time = chrono::steady_clock::now();
 
@@ -768,6 +810,26 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
   {
     if (_pipeline->isReadyToProcess())
     {
+      if (is_raspberry_pi()) {
+        if (!_camera.getVideoFrame(_rgb, 100)) {
+          // Input stream is over
+          return return_type::warning;
+        }
+      } else { 
+        _cap >> _rgb;
+        if (_rgb.empty()) {
+          // Input stream is over
+          return return_type::error;
+        }
+      }
+
+      /* 
+      if (_rgb.empty()) {
+        // Input stream is over
+        return return_type::error;
+      }
+      */
+
       _frame_num = _pipeline->submitData(
           ImageInputData(_rgb), make_shared<ImageMetaData>(_rgb, _start_time));
     }
@@ -789,7 +851,6 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
       renderHumanPose(_result->asRef<HumanPoseResult>(), _output_transform);
     }
     _frames_processed++;
-
     return return_type::success;
   }
 
@@ -1091,7 +1152,6 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
     skeleton_from_depth_compute(_params["debug"]["skeleton_from_depth_compute"]);
     point_cloud_filter(_params["debug"]["point_cloud_filter"]);
     skeleton_from_rgb_compute(_params["debug"]["skeleton_from_rgb_compute"]);
-
     if (!(_result))
     {
       return return_type::warning;
@@ -1104,7 +1164,13 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 
       Mat rgb_flipped;
       flip(_rgb, rgb_flipped, 1);
-      imshow("Human Pose Estimation Results", rgb_flipped);
+      if (rgb_flipped.empty()){
+        std::cout << "Failed to load image"<< std::endl;
+        return return_type::warning;
+      }else{
+        std::cout << "Image loaded"<< std::endl;
+        imshow("Human Pose Estimation Results", rgb_flipped);
+      }
 
       int max_depth;
 #ifdef KINECT_AZURE
@@ -1133,22 +1199,27 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 #else
       max_depth = 2000;
 #endif
-      
+      /* 
       Mat rgbd_flipped;
       flip(_rgbd_filtered, rgbd_flipped, 1);
       rgbd_flipped.convertTo(rgbd_flipped, CV_8U, 255.0 / max_depth);
       Mat rgbd_flipped_color;
       applyColorMap(rgbd_flipped, rgbd_flipped_color, COLORMAP_HSV); // Apply the colormap:
       imshow("rgbd", rgbd_flipped_color);
-      
+      */
       int key = cv::waitKey(1000.0 / _fps);
+      
       //system("pause");
       if (27 == key || 'q' == key || 'Q' == key)
       { // Esc
 #ifdef KINECT_AZURE
         _device.close();
 #else
+      if (is_raspberry_pi()) {
+        _camera.stopVideo();
+      } else {
         _cap.release();
+      }
 #endif
         destroyAllWindows();
 
@@ -1226,6 +1297,7 @@ protected:
 
   bool _dummy = false;
 
+  lccv::PiCamera _camera; // for Raspi
   int _camera_device = 0;
   data_t _fps = 25;
   string _resolution_rgb = "";
