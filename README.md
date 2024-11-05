@@ -4,8 +4,13 @@ This is a Source plugin for [MADS](https://github.com/MADS-NET/MADS).
 
 <provide here some introductory info>
 
-*Required MADS version: 1.2.0.*
+## Requirements
 
+OpenCV, OpenVINO, VTK, PCL and Libcamera. 
+
+On Linux, including RaspbianOS, OpenCV can be installed with `sudo apt install libopencv-dev`. OpenVino must be installed following the instructions here: <https://docs.openvino.ai/2024/get-started/install-openvino/install-openvino-archive-linux.html> . VTK can be installed with 'sudo apt-get install libvtk9-dev'. PCL can be installed with 'sudo apt install libpcl-dev'. Libcamera can be installed with 'sudo apt install libcamera-dev'.
+
+PS Verify the OpenVINO installation path in the CMakeLists.txt file to ensure it points to the correct directory in your PC. 
 
 ## Supported platforms
 
