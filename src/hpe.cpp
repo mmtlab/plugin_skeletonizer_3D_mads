@@ -35,8 +35,10 @@
 #include <pipelines/async_pipeline.h>
 #include <pipelines/metadata.h>
 #include <utils/common.hpp>
-#include <lccv.hpp> // for Raspi
 
+#ifdef RASPBERRYPI
+#include <lccv.hpp> // for Raspi
+#endif
 
 // Define the name of the plugin
 #ifndef PLUGIN_NAME
@@ -203,14 +205,19 @@ public:
   // Destructor
   ~HpePlugin()
   {
-    if (is_raspberry_pi()) {
-      _camera.stopVideo();
-     } else {
-      _cap.release();
-    }
+
 #ifdef KINECT_AZURE
 
+#elif RASPBERRYPI
+
+    if (is_raspberry_pi()) {
+      _camera.stopVideo();
+     }
+
+#else
+    _cap.release();
 #endif
+
     delete _pipeline;
   }
 
@@ -310,7 +317,7 @@ public:
       _rgb = cv::Mat(rows, cols, CV_8UC4, (void *)buffer, cv::Mat::AUTO_STEP);
       cvtColor(_rgb, _rgb, cv::COLOR_BGRA2BGR);
     }
-#else
+#elif RASPBERRYPI
     if (is_raspberry_pi()) {
       std::cout << "It is running on a Raspi" << std::endl;
       _camera.options->video_width=1280; //640;
@@ -328,16 +335,15 @@ public:
       //while (!_camera.getVideoFrame(_rgb, 100)) {
       //  cout << "Waiting for video frame..." << endl;
       //}
-    } else {
-      // setup video capture
+    }
+#else
+// setup video capture
       _cap.open(_camera_device);
       if (!_cap.isOpened())
       {
         throw invalid_argument("ERROR: Cannot open the video camera");
       }
       _cap >> _rgb;
-    }
-
 #endif
     _start_time = chrono::steady_clock::now();
     cv::Size resolution = _rgb.size();
@@ -603,12 +609,16 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
       //point_cloud_color_to_depth(_pc_transformation, depth_handle, color_handle, "../plugin_skeletonizer_3D/test.ply");
 
 
-#else
+#endif
+
+#ifdef RASPBERRYPI
       if (is_raspberry_pi()) {
         _camera.getVideoFrame(_rgb, 100);
-      }else{ 
-        _cap >> _rgb;
       }
+      
+#else 
+        _cap >> _rgb;
+     
 #endif
 
       if (_rgb.empty())
@@ -810,18 +820,23 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
   {
     if (_pipeline->isReadyToProcess())
     {
-      if (is_raspberry_pi()) {
-        if (!_camera.getVideoFrame(_rgb, 100)) {
-          // Input stream is over
-          return return_type::warning;
-        }
-      } else { 
+
+      #ifdef KINECT_AZURE
         _cap >> _rgb;
-        if (_rgb.empty()) {
-          // Input stream is over
-          return return_type::error;
+          if (_rgb.empty()) {
+            // Input stream is over
+            return return_type::error;
+          }
+      #endif
+
+      #ifdef RASPBERRY_PI
+        if (is_raspberry_pi()) {
+          if (!_camera.getVideoFrame(_rgb, 100)) {
+            // Input stream is over
+            return return_type::warning;
+          }
         }
-      }
+      #endif
 
       /* 
       if (_rgb.empty()) {
@@ -1214,12 +1229,13 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
       { // Esc
 #ifdef KINECT_AZURE
         _device.close();
-#else
+#elif RASPBERRYPI
+        _camera.stopVideo();
       if (is_raspberry_pi()) {
         _camera.stopVideo();
-      } else {
-        _cap.release();
-      }
+      } 
+#else
+      _cap.release();
 #endif
         destroyAllWindows();
 
@@ -1297,7 +1313,9 @@ protected:
 
   bool _dummy = false;
 
+  #ifdef RASPBERRYPI
   lccv::PiCamera _camera; // for Raspi
+  #endif
   int _camera_device = 0;
   data_t _fps = 25;
   string _resolution_rgb = "";
