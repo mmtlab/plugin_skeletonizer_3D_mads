@@ -58,6 +58,7 @@
 // Load the namespaces
 using namespace cv;
 using namespace std;
+using namespace std::chrono; 
 using json = nlohmann::json;
 
 typedef float data_t;
@@ -281,6 +282,9 @@ public:
     cout << "   Camera calibrated!" << endl;
 
     _pc_transformation = k4a_transformation_create(&sensor_calibration);
+
+    // ALE
+    colorAzure_intrinsics = sensor_calibration.get_color_camera_calibration().intrinsics;
 
     k4abt_tracker_configuration_t trackerConfig = K4ABT_TRACKER_CONFIG_DEFAULT;
     if (_params.contains("CUDA"))
@@ -609,6 +613,7 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
       }else{ 
         _cap >> _rgb;
       }
+
 #endif
 
       if (_rgb.empty())
@@ -662,6 +667,20 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 
         frame_result_json["poses"][keypoint_name] = { position.v[0], position.v[1], position.v[2] };
         frame_result_json["cov"][keypoint_name] = { confidence_level };
+      }
+
+      // ALE
+      for (int i = 0; i < 18; ++i) {
+          std::string keypoint_name_tmp = keypoints_map[i]; 
+          
+          for (const auto& [index, keypoint_azure_name] : keypoints_map_azure) {
+              
+              if (keypoint_azure_name == keypoint_name_tmp) {
+                  k4a_float3_t position = body.skeleton.joints[index].position;
+                  _keypoints_listTOF[i] = cv::Point3f(position.v[0], position.v[1], position.v[2]);
+                  break;
+              }
+          }
       }
 
       if (debug)
@@ -875,7 +894,7 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
     _keypoints_cov.clear();
     _poses.clear();
     _poses = _result->asRef<HumanPoseResult>().poses;
-    // cout << "poses.size()-----> " << poses.size() << endl;
+    //cout << "poses.size()-----> " << _poses.size() << endl;
     if (_poses.size() > 0)
     { // at least one person
 
@@ -958,6 +977,7 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
           A << H11, H12, H21, H22;
 
           Eigen::Matrix2f C = A.inverse();
+          _cov2D.push_back(C);
           Eigen::EigenSolver<Eigen::Matrix2f> s(C); // the instance s(C)
                                                     // includes the eigensystem
 
@@ -1040,9 +1060,18 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
                          cv::FILLED, 8, 0);
             }
           }
+        } else {
+          Eigen::Matrix2f A_NaN;
+          A_NaN << -1, -1, -1, -1;
+          _cov2D.push_back(A_NaN);
         }
-      }
+      } 
     }
+
+    //cout << "_cov2D.size(): " << _cov2D.size() << endl; // now 18 if a person exist
+    //_cov2D.clear();
+    //cout << "_keypoints_list.size(): " << _keypoints_list.size() << endl; 
+
     return return_type::success;
   }
 
@@ -1059,7 +1088,134 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
    * @author Alessandro
    * @return result status ad defined in return_type
    */
-  return_type cov3D_compute(bool debug = false) { return return_type::success; }
+  return_type cov3D_compute(bool debug = false) { 
+    #ifdef KINECT_AZURE
+
+      float fx = colorAzure_intrinsics.parameters.param.fx;
+      float fy = colorAzure_intrinsics.parameters.param.fy;
+      float cx = colorAzure_intrinsics.parameters.param.cx;
+      float cy = colorAzure_intrinsics.parameters.param.cy;
+
+      if (_keypoints_list.size() > 0) 
+      { // at least one person
+        for (size_t i = 0; i < _cov2D.size(); ++i)
+        {
+          Eigen::Matrix2f _cov2D_TMP = _cov2D[i];
+
+          if (!(_keypoints_listTOF[i].x == -1 && _keypoints_listTOF[i].y == -1 && _keypoints_listTOF[i].z == -1) &&
+          !(_cov2D_TMP.array() == -1).all()) {
+
+            float Z_tmp = _keypoints_listTOF[i].z;
+            float sigma_z = 0.015 * Z_tmp + 2; // KINECT AZURE model
+            float variance_z = sigma_z * sigma_z;
+
+            Eigen::Matrix<float, 3 , 2> J;
+            J << Z/f_x,  0,
+                  0   ,  Z/f_y,
+                  0   ,  0; 
+
+            Eigen::Matrix3f covMatrixZ;
+            covMatrixZ << 0,  0,  0,
+                          0,  0,  0,
+                          0,  0,  variance_z;  
+
+            Eigen::Matrix3f covMatrix3D = J * _cov2D_TMP * J.transpose() + covMatrixZ;
+            _cov3D.push_back(covMatrix3D);
+          } else {
+            Eigen::Matrix3f covMatrixZ_NaN;
+            covMatrixZ_NaN.setConstant(-1);
+            _cov3D.push_back(covMatrixZ_NaN);
+          }
+        }
+      }
+
+      _cov2D.clear(); // before clean databese
+      _cov3D.clear();
+
+      return return_type::success; 
+    #else
+
+      // RASPI
+      // Intrinsic parameters
+      float f_mm = 6; // focal length in mm https://grobotronics.com/raspberry-pi-hq-camera-lens-6mm-wide-angle.html?sl=en
+      // Sensor dimensions:
+      float d_x = (4056*1.55)/1000; // https://www.waveshare.com/wiki/Raspberry_Pi_HQ_Camera
+      float d_y = (3040*1.55)/1000;
+      
+      int H = _rgb.rows; // image size after resize
+      int W = _rgb.cols;
+
+      float f_x = (f_mm * W)/d_x; // focal length in pixel 
+      float f_y = (f_mm * H)/d_y; // focal length in pixel
+
+      float c_x = W/2; // coordinate of the principal point
+      float c_y = H/2;
+
+      float Hp = 500; // Real "height" of the selected person in mm between nec and hip 
+      float sigmaHp = 2; // mm
+
+      if (_keypoints_list.size() > 0) 
+      { // at least one person
+        if (_keypoints_list[1].x > 0 && _keypoints_list[1].y > 0 && _keypoints_list[8].x > 0 && _keypoints_list[8].y > 0 && _keypoints_list[11].x > 0 && _keypoints_list[11].y > 0)
+        { // 1 = NEC_     8 = HIPR    11 = HIPL
+    
+          float v_nec = _keypoints_list[1].y;
+          float v_hip_tmp = fabs(_keypoints_list[11].y - _keypoints_list[8].y) / 2.0f;
+          float v_hip;
+          if (_keypoints_list[11].y < _keypoints_list[8].y)
+          {
+            v_hip = v_hip_tmp + _keypoints_list[11].y;
+          }else{
+            v_hip = v_hip_tmp + _keypoints_list[8].y;
+          }
+          
+          float Z = (f_y * Hp) / fabs(v_hip - v_nec);
+
+          //cout << "Z---------->    " << Z << endl;
+          Eigen::Matrix2f _cov2D_NEC = _cov2D[1];
+          float variance_necY = _cov2D_NEC(1,1);
+
+          Eigen::Matrix2f _cov2D_HIP = (_cov2D[11] + _cov2D[8]) / 2.0;
+          float variance_hipY = _cov2D_HIP(1,1);
+
+          for (size_t i = 0; i < _cov2D.size(); ++i)
+            {
+              Eigen::Matrix2f _cov2D_TMP = _cov2D[i];
+              if (!(_cov2D_TMP.array() == -1).all()) 
+              {
+                Eigen::Matrix<float, 3 , 2> J;
+                J << Z/f_x,  0,
+                      0   ,  Z/f_y,
+                      0   ,  0;
+                
+                float variance_z_Hp = pow(f_y / fabs(v_hip - v_nec),2) * pow(sigmaHp,2);
+                float variance_z_nec = pow(f_y*Hp/pow(v_hip - v_nec,2),2) * variance_necY;
+                float variance_z_hip = pow(f_y*Hp/pow(v_hip - v_nec,2),2) * variance_hipY;
+                float variance_z = variance_z_Hp + variance_z_nec + variance_z_hip; 
+
+                Eigen::Matrix3f covMatrixZ;
+                covMatrixZ << 0,  0,  0,
+                              0,  0,  0,
+                              0,  0,  variance_z;  
+
+                Eigen::Matrix3f covMatrix3D = J * _cov2D_TMP * J.transpose() + covMatrixZ;
+                _cov3D.push_back(covMatrix3D);
+              } else {
+                Eigen::Matrix3f covMatrixZ_NaN;
+                covMatrixZ_NaN.setConstant(-1);
+                _cov3D.push_back(covMatrixZ_NaN);
+              }
+            }
+        }
+      }
+
+      _cov2D.clear(); // before clean databese
+      _cov3D.clear();
+  
+      return return_type::success; 
+    #endif
+
+  }
 
   /**
    * @brief Consistency check of the 3D skeleton according to human physiology
@@ -1158,6 +1314,8 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
     }
 
     hessian_compute(_params["debug"]["hessian_compute"]);
+
+    cov3D_compute(_params["debug"]["cov3D_compute"]);
 
     if (_params["debug"]["viewer"])
     {
@@ -1281,7 +1439,9 @@ protected:
       _skeleton3D;       /**< the skeleton from 3D cameras only*/
   vector<Mat> _heatmaps; /**< the joints heatmaps */
   Mat _point_cloud;      /**< the filtered body point cloud */
-  Mat _cov3D;            /**< the 3D covariance matrix */
+  std::vector<Eigen::Matrix2f> _cov2D;
+  std::vector<Eigen::Matrix3f> _cov3D;
+  //Mat _cov3D;            /**< the 3D covariance matrix */
   Mat _cov3D_adj;        /**< the adjusted 3D covariance matrix */
   json _params;          /**< the parameters of the plugin */
 
@@ -1304,6 +1464,7 @@ protected:
   int _rgb_height; /**< image size rows */
   int _rgb_width;  /**< image size cols */
   vector<cv::Point2i> _keypoints_list;
+  vector<cv::Point3f> _keypoints_listTOF = vector<cv::Point3f>(18, cv::Point3f(-1, -1, -1));
   vector<cv::Point3f> _keypoints_cov;
   string _model_file;
   string _agent_id;
@@ -1319,6 +1480,7 @@ protected:
   k4a::image _depth_image;
   k4abt::frame _body_frame;
   k4a_transformation_t _pc_transformation; /**< the transformation */
+  k4a_calibration_intrinsic_parameters_t colorAzure_intrinsics; 
 
 #endif
   ov::Core _core;
@@ -1375,6 +1537,10 @@ int main(int argc, char const *argv[]) {
     plugin.set_params(&params);
 
     json output = {};
+    
+    auto start_time = high_resolution_clock::now();  
+    int frame_count = 0;  
+    double fps = 0.0;
 
 
     while ((rt = plugin.get_output(output)) != return_type::error)
@@ -1384,8 +1550,24 @@ int main(int argc, char const *argv[]) {
         cout << endl
              << "*** Warning: no result." << endl;
       } else {
-        cout << "Output: " << output.dump() << endl;
+        //cout << "Output: " << output.dump() << endl;
       }
+      
+      frame_count++;
+
+      auto now = high_resolution_clock::now();
+      auto duration = duration_cast<seconds>(now - start_time).count();  // Durata in secondi
+
+      // Every second calculate FPS and reset timer
+      if (duration >= 1) 
+      {
+        fps = frame_count / duration;  
+        cout << "-----------------> FPS: " << fps << endl;
+
+        start_time = now;
+        frame_count = 0;
+      }
+      
     }
   
     cout << endl;
