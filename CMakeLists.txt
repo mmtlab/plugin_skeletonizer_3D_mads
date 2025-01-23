@@ -28,7 +28,9 @@ set(USR_DIR ${CMAKE_CURRENT_LIST_DIR}/usr)
 set(SRC_DIR ${CMAKE_CURRENT_LIST_DIR}/src)
 set(CMAKE_INSTALL_PREFIX ${USR_DIR})
 set(FETCHCONTENT_QUIET OFF)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+if (UNIX)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+endif()
 option(SKIP_KINECT_AZURE "Do not use Kinect Azure cameras" OFF)
 
 if(UNIX AND NOT APPLE)
@@ -76,9 +78,6 @@ find_package(PCL 1.13 REQUIRED)
 
 find_package(PkgConfig REQUIRED)
 
-#pkg_check_modules(LIBCAMERA REQUIRED libcamera)
-
-
 include(FetchContent)
 
 # pugg is for the plugin system
@@ -109,22 +108,33 @@ FetchContent_Declare(plugin
   GIT_SHALLOW    TRUE
 )
 
+FetchContent_MakeAvailable(pugg json eigen)
+FetchContent_Populate(plugin)
+
+include_directories(
+  ${OpenCV_INCLUDE_DIRS}
+  ${OPENVINO_INCLUDE_DIR}
+  ${PCL_INCLUDE_DIRS}
+  ${json_SOURCE_DIR}/include
+  ${plugin_SOURCE_DIR}/src
+)
+
+
 if (UNIX)
+# LCCV
   FetchContent_Declare(LCCV
     GIT_REPOSITORY https://github.com/pbosetti/LCCV.git
     GIT_TAG        HEAD
     GIT_SHALLOW    TRUE
   )
+  FetchContent_MakeAvailable(LCCV)
+  include_directories(${lccv_SOURCE_DIR}/include)
+# LibCamera
+  pkg_check_modules(LIBCAMERA REQUIRED libcamera)
+  if (LIBCAMERA_FOUND)
+    include_directories(${LIBCAMERA_INCLUDE_DIRS})
+  endif()
 endif()
-
-if (UNIX)
-  FetchContent_MakeAvailable(pugg json eigen LCCV)
-else()
-  FetchContent_MakeAvailable(pugg json eigen)
-endif()
-FetchContent_Populate(plugin)
-
-include_directories(${plugin_SOURCE_DIR}/src)
 
 
 # MACROS #######################################################################
@@ -188,23 +198,18 @@ list(APPEND COMMON_SOURCES ${SRC_DIR}/args_helper.cpp)
 
 # Add the include directories ##################################################
 include_directories(
-  ${OpenCV_INCLUDE_DIRS}
-  ${OPENVINO_INCLUDE_DIR}
-  ${PCL_INCLUDE_DIRS}
-  ${json_SOURCE_DIR}/include
   ${COMMON}/models/include
   ${COMMON}/monitors/include
   ${COMMON}/pipelines/include
   ${COMMON}/utils/include
-  #${lccv_SOURCE_DIR}/include
-  #${LIBCAMERA_INCLUDE_DIRS}
-)
-
+  ${COMMON}/utils/src
+  )
+  
+  
 if(WIN32)
   set( CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" ${CMAKE_MODULE_PATH} )
 endif()
 
-include_directories(${json_SOURCE_DIR}/include)
 
 # TARGETS ######################################################################
 link_directories(${PCL_LIBRARY_DIRS})
@@ -220,10 +225,14 @@ endif()
 
 if(k4a_FOUND AND k4abt_FOUND AND NOT SKIP_KINECT_AZURE)
   add_plugin(hpe LIBS ${OpenCV_LIBS} ${PCL_LIBRARIES} common openvino::runtime Eigen3::Eigen k4a::k4a k4a::k4abt )
-  target_compile_definitions(hpe PRIVATE KINECT_AZURE)
+  target_compile_definitions(hpe PRIVATE KINECT_AZURE=1)
+  target_compile_definitions(hpe_main PRIVATE KINECT_AZURE=1)
 else()
-  add_plugin(hpe LIBS ${OpenCV_LIBS} ${PCL_LIBRARIES} common openvino::runtime Eigen3::Eigen lccv_static ${LIBCAMERA_LINK_LIBRARIES})
-  target_compile_definitions(hpe PRIVATE RASPBERRYPI)
+  if(WIN32)
+    add_plugin(hpe LIBS ${OpenCV_LIBS} ${PCL_LIBRARIES} common openvino::runtime Eigen3::Eigen)
+  else()
+    add_plugin(hpe LIBS ${OpenCV_LIBS} ${PCL_LIBRARIES} common openvino::runtime Eigen3::Eigen lccv_static ${LIBCAMERA_LINK_LIBRARIES})
+  endif()
 endif()
 
 # Download OpenPOSE models #####################################################

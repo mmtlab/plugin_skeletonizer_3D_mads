@@ -7,7 +7,7 @@
 #if defined(_WIN32)
 
 #ifndef NOMINMAX
-# define NOMINMAX
+#define NOMINMAX
 #endif
 
 #include <WinSock2.h>
