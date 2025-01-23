@@ -35,8 +35,10 @@
 #include <pipelines/async_pipeline.h>
 #include <pipelines/metadata.h>
 #include <utils/common.hpp>
-#include <lccv.hpp> // for Raspi
 
+#ifdef __linux
+#include <lccv.hpp> // for Raspi
+#endif
 
 // Define the name of the plugin
 #ifndef PLUGIN_NAME
@@ -49,6 +51,7 @@
 #endif
 
 #ifdef KINECT_AZURE
+#pragma message ("Kinect Azure is enabled")
 // include Kinect libraries
 #include <k4a/k4a.h>
 #include <k4a/k4a.hpp>
@@ -204,13 +207,15 @@ public:
   // Destructor
   ~HpePlugin()
   {
+
+#ifdef KINECT_AZURE
+    _device.stop_cameras();
+    _device.close();
+#else
     if (is_raspberry_pi()) {
       _camera.stopVideo();
-     } else {
-      _cap.release();
-    }
-#ifdef KINECT_AZURE
-
+     }
+    _cap.release();
 #endif
     delete _pipeline;
   }
@@ -239,7 +244,8 @@ public:
         ImageInputData(_rgb), make_shared<ImageMetaData>(_rgb, _start_time));
   }
 
-   bool is_raspberry_pi() {
+  bool is_raspberry_pi() 
+  {
     std::ifstream cpuinfo("/proc/cpuinfo");
     std::string line;
     while (std::getline(cpuinfo, line)) {
@@ -255,7 +261,7 @@ public:
   void setup_VideoCapture()
   {
 
-#ifdef KINECT_AZURE
+#if defined(KINECT_AZURE)
     _device_config =
         K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
     _device_config.color_format =
@@ -332,7 +338,8 @@ public:
       //while (!_camera.getVideoFrame(_rgb, 100)) {
       //  cout << "Waiting for video frame..." << endl;
       //}
-    } else {
+    }
+    else {
       // setup video capture
       _cap.open(_camera_device);
       if (!_cap.isOpened())
@@ -341,8 +348,8 @@ public:
       }
       _cap >> _rgb;
     }
-
 #endif
+
     _start_time = chrono::steady_clock::now();
     cv::Size resolution = _rgb.size();
     std::cout << "Frame resolution: " << resolution.width << "x" << resolution.height << std::endl;
@@ -605,15 +612,13 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 
       // Debug function to save the point cloud in a .ply file
       //point_cloud_color_to_depth(_pc_transformation, depth_handle, color_handle, "../plugin_skeletonizer_3D/test.ply");
-
-
 #else
       if (is_raspberry_pi()) {
         _camera.getVideoFrame(_rgb, 100);
-      }else{ 
-        _cap >> _rgb;
-      }
-
+      }  
+      
+      _cap >> _rgb;
+     
 #endif
 
       if (_rgb.empty())
@@ -658,15 +663,17 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
       // Only take one body (always the first one)
       k4abt_body_t body = _body_frame.get_body(0);
 
-      json frame_result_json;
-
+      _skeleton3D.clear();
       for (const auto& [index, keypoint_name] : keypoints_map_azure)
       {
         k4a_float3_t position = body.skeleton.joints[index].position;
-        k4abt_joint_confidence_level_t confidence_level = body.skeleton.joints[index].confidence_level;
 
-        frame_result_json["poses"][keypoint_name] = { position.v[0], position.v[1], position.v[2] };
-        frame_result_json["cov"][keypoint_name] = { confidence_level };
+        vector<float> keypoint_data;
+        keypoint_data.push_back(static_cast<float>(position.v[0]));
+        keypoint_data.push_back(static_cast<float>(position.v[1]));
+        keypoint_data.push_back(static_cast<float>(position.v[2]));
+
+        _skeleton3D[keypoint_name] = keypoint_data;
       }
 
       // ALE
@@ -684,8 +691,23 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
       }
 
       if (debug)
-        cout << frame_result_json.dump(4) << endl;
-        
+      {
+        cout << "\nSkeleton 3D:" << endl;
+        for (const auto& [keypoint_name, keypoint_data] : _skeleton3D)
+        {
+          cout << keypoint_name << ": (";
+          for (size_t i = 0; i < keypoint_data.size(); ++i)
+          {
+            cout << static_cast<int>(keypoint_data[i]);
+            if (i < keypoint_data.size() - 1)
+            {
+              cout << ", ";
+            }
+          }
+          cout << ")" << endl;
+        }
+      }
+      
     }
     else
     {
@@ -829,25 +851,20 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
   {
     if (_pipeline->isReadyToProcess())
     {
-      if (is_raspberry_pi()) {
-        if (!_camera.getVideoFrame(_rgb, 100)) {
-          // Input stream is over
-          return return_type::warning;
-        }
-      } else { 
-        _cap >> _rgb;
-        if (_rgb.empty()) {
-          // Input stream is over
-          return return_type::error;
-        }
-      }
-
-      /* 
+      
       if (_rgb.empty()) {
         // Input stream is over
         return return_type::error;
       }
-      */
+      
+      #ifdef __linux
+        if (is_raspberry_pi()) {
+          if (!_camera.getVideoFrame(_rgb, 100)) {
+            // Input stream is over
+            return return_type::warning;
+          }
+        }
+      #endif
 
       _frame_num = _pipeline->submitData(
           ImageInputData(_rgb), make_shared<ImageMetaData>(_rgb, _start_time));
@@ -1357,14 +1374,14 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 #else
       max_depth = 2000;
 #endif
-      /* 
+      
       Mat rgbd_flipped;
       flip(_rgbd_filtered, rgbd_flipped, 1);
       rgbd_flipped.convertTo(rgbd_flipped, CV_8U, 255.0 / max_depth);
       Mat rgbd_flipped_color;
       applyColorMap(rgbd_flipped, rgbd_flipped_color, COLORMAP_HSV); // Apply the colormap:
       imshow("rgbd", rgbd_flipped_color);
-      */
+      
       int key = cv::waitKey(1000.0 / _fps);
       
       //system("pause");
@@ -1375,9 +1392,8 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 #else
       if (is_raspberry_pi()) {
         _camera.stopVideo();
-      } else {
-        _cap.release();
       }
+      _cap.release();
 #endif
         destroyAllWindows();
 
@@ -1435,7 +1451,7 @@ protected:
   Mat _rgbd_filtered; /**< the last RGBD frame filtered with the body index mask*/
   map<string, vector<unsigned char>>
       _skeleton2D; /**< the skeleton from 2D cameras only*/
-  map<string, vector<unsigned char>>
+  map<string, vector<float>>
       _skeleton3D;       /**< the skeleton from 3D cameras only*/
   vector<Mat> _heatmaps; /**< the joints heatmaps */
   Mat _point_cloud;      /**< the filtered body point cloud */
@@ -1457,7 +1473,9 @@ protected:
 
   bool _dummy = false;
 
+  #ifdef __linux
   lccv::PiCamera _camera; // for Raspi
+  #endif
   int _camera_device = 0;
   data_t _fps = 25;
   string _resolution_rgb = "";
