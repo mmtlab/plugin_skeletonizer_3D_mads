@@ -23,6 +23,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/opencv.hpp>
 #include <string>
+#include <filesystem>
 
 #include <pcl/console/parse.h>
 #include <pcl/io/pcd_io.h>
@@ -255,285 +256,298 @@ public:
   void setup_VideoCapture()
   {
 
-#ifdef KINECT_AZURE
-    _device_config =
-        K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
-    _device_config.color_format =
-        K4A_IMAGE_FORMAT_COLOR_BGRA32; // <==== For Color image
-    _device_config.color_resolution = K4A_COLOR_RESOLUTION_720P;
-    _device_config.depth_mode =
-        K4A_DEPTH_MODE_NFOV_UNBINNED; // <==== For Depth image
+    size_t found = _resolution_rgb.find("x");
+    int rgb_width_read = 1280;
+    int rgb_height_read = 720; 
 
-    if (_params.contains("azure_device"))
+    if (found != string::npos)
     {
-      _azure_device = _params["azure_device"];
-      cout << "   Camera id: " << _azure_device << endl;
-    }
-    else
-    {
-      cout << "   Camera id (default): " << _azure_device << endl;
+      cout << "found? " << found << endl;
+      rgb_width_read = stoi(_resolution_rgb.substr(0, found));
+      rgb_height_read = stoi(_resolution_rgb.substr(found + 1, _resolution_rgb.length()));
     }
 
-    _device = k4a::device::open(_azure_device);
-    _device.start_cameras(&_device_config);
+    if (_dummy) {
+      acquire_frame(_dummy);
+    }else{
+      #ifdef KINECT_AZURE
+          _device_config =
+              K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+          _device_config.color_format =
+              K4A_IMAGE_FORMAT_COLOR_BGRA32; // <==== For Color image
+          _device_config.color_resolution = K4A_COLOR_RESOLUTION_720P;
+          _device_config.depth_mode =
+              K4A_DEPTH_MODE_NFOV_UNBINNED; // <==== For Depth image
 
-    k4a::calibration sensor_calibration = _device.get_calibration(
-        _device_config.depth_mode, _device_config.color_resolution);
-    cout << "   Camera calibrated!" << endl;
+          if (_params.contains("azure_device"))
+          {
+            _azure_device = _params["azure_device"];
+            cout << "   Camera id: " << _azure_device << endl;
+          }
+          else
+          {
+            cout << "   Camera id (default): " << _azure_device << endl;
+          }
 
-    _pc_transformation = k4a_transformation_create(&sensor_calibration);
+          _device = k4a::device::open(_azure_device);
+          _device.start_cameras(&_device_config);
 
-    // ALE
-    colorAzure_intrinsics = sensor_calibration.get_color_camera_calibration().intrinsics;
+          k4a::calibration sensor_calibration = _device.get_calibration(
+              _device_config.depth_mode, _device_config.color_resolution);
+          cout << "   Camera calibrated!" << endl;
 
-    k4abt_tracker_configuration_t trackerConfig = K4ABT_TRACKER_CONFIG_DEFAULT;
-    if (_params.contains("CUDA"))
-    {
-      cout << "   Body tracker CUDA processor enabled: " << _params["CUDA"]
-           << endl;
-      if (_params["CUDA"] == true)
-        trackerConfig.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU_CUDA;
+          _pc_transformation = k4a_transformation_create(&sensor_calibration);
+
+          //colorAzure_intrinsics = sensor_calibration.get_color_camera_calibration().intrinsics; // CHECK HOT TO DO
+
+          k4abt_tracker_configuration_t trackerConfig = K4ABT_TRACKER_CONFIG_DEFAULT;
+          if (_params.contains("CUDA"))
+          {
+            cout << "   Body tracker CUDA processor enabled: " << _params["CUDA"]
+                << endl;
+            if (_params["CUDA"] == true)
+              trackerConfig.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU_CUDA;
+          }
+          _tracker = k4abt::tracker::create(sensor_calibration, trackerConfig);
+
+          // acquire a frame just to get the resolution
+          _device.get_capture(&_k4a_rgbd,
+                              std::chrono::milliseconds(K4A_WAIT_INFINITE));
+
+          k4a::image colorImage = _k4a_rgbd.get_color_image();
+
+          // from k4a::image to cv::Mat --> color image
+          if (colorImage != NULL)
+          {
+            // get raw buffer
+            uint8_t *buffer = colorImage.get_buffer();
+
+            // convert the raw buffer to cv::Mat
+            int rows = colorImage.get_height_pixels();
+            int cols = colorImage.get_width_pixels();
+            _rgb = cv::Mat(rows, cols, CV_8UC4, (void *)buffer, cv::Mat::AUTO_STEP);
+            cvtColor(_rgb, _rgb, cv::COLOR_BGRA2BGR);
+          }
+      #else
+          if (is_raspberry_pi()) {
+            std::cout << "It is running on a Raspi" << std::endl;
+            _camera.options->video_width=rgb_width_read; //1280;
+            _camera.options->video_height=rgb_height_read; //720;
+            _camera.options->framerate = 25;
+            _camera.options->verbose = false;
+            _camera.startVideo();
+
+            do {
+              if (!_camera.getVideoFrame(_rgb, 100)) {
+                  std::cout << "Waiting for video frame..." << std::endl;
+              }
+            } while (_rgb.empty()); 
+
+            //while (!_camera.getVideoFrame(_rgb, 100)) {
+            //  cout << "Waiting for video frame..." << endl;
+            //}
+          } else {
+            // setup video capture
+            _cap.open(_camera_device);
+            if (!_cap.isOpened())
+            {
+              throw invalid_argument("ERROR: Cannot open the video camera");
+            }
+            _cap >> _rgb;
+          }
+
+      #endif
     }
-    _tracker = k4abt::tracker::create(sensor_calibration, trackerConfig);
 
-    // acquire a frame just to get the resolution
-    _device.get_capture(&_k4a_rgbd,
-                        std::chrono::milliseconds(K4A_WAIT_INFINITE));
-
-    k4a::image colorImage = _k4a_rgbd.get_color_image();
-
-    // from k4a::image to cv::Mat --> color image
-    if (colorImage != NULL)
-    {
-      // get raw buffer
-      uint8_t *buffer = colorImage.get_buffer();
-
-      // convert the raw buffer to cv::Mat
-      int rows = colorImage.get_height_pixels();
-      int cols = colorImage.get_width_pixels();
-      _rgb = cv::Mat(rows, cols, CV_8UC4, (void *)buffer, cv::Mat::AUTO_STEP);
-      cvtColor(_rgb, _rgb, cv::COLOR_BGRA2BGR);
-    }
-#else
-    if (is_raspberry_pi()) {
-      std::cout << "It is running on a Raspi" << std::endl;
-      _camera.options->video_width=1280; //640;
-      _camera.options->video_height=720; //480;
-      _camera.options->framerate = 25;
-      _camera.options->verbose = false;
-      _camera.startVideo();
-
-      do {
-        if (!_camera.getVideoFrame(_rgb, 100)) {
-            std::cout << "Waiting for video frame..." << std::endl;
-        }
-      } while (_rgb.empty()); 
-
-      //while (!_camera.getVideoFrame(_rgb, 100)) {
-      //  cout << "Waiting for video frame..." << endl;
-      //}
-    } else {
-      // setup video capture
-      _cap.open(_camera_device);
-      if (!_cap.isOpened())
-      {
-        throw invalid_argument("ERROR: Cannot open the video camera");
-      }
-      _cap >> _rgb;
-    }
-
-#endif
     _start_time = chrono::steady_clock::now();
     cv::Size resolution = _rgb.size();
     std::cout << "Frame resolution: " << resolution.width << "x" << resolution.height << std::endl;
 
-    size_t found = _resolution_rgb.find("x");
-    if (found != string::npos)
-    {
-      cout << "found? " << found << endl;
-      resolution = cv::Size{
-          stoi(_resolution_rgb.substr(0, found)),
-          stoi(_resolution_rgb.substr(found + 1, _resolution_rgb.length()))};
-
-      _output_transform = OutputTransform(_rgb.size(), resolution);
-      resolution = _output_transform.computeResolution();
-      cv::resize(_rgb, _rgb, cv::Size(resolution.width, resolution.height)); 
+    if (!_dummy){ // if dummy I don't change the image resolution
+      if (found != string::npos)
+      {
+        resolution = cv::Size{rgb_width_read, rgb_height_read};
+            
+        _output_transform = OutputTransform(_rgb.size(), resolution);
+        resolution = _output_transform.computeResolution();
+        cv::resize(_rgb, _rgb, cv::Size(resolution.width, resolution.height)); 
+      }
     }
 
     _rgb_height = resolution.height; //_rgb.rows;
     _rgb_width = resolution.width;   //_rgb.cols;
     cout << "   RGB Camera resolution: " << _rgb_width << "x" << _rgb_height
          << endl;
+
+    #ifdef KINECT_AZURE
+      return_type create_point_cloud(k4a_transformation_t transformation_handle,
+                                          const k4a_image_t depth_image,
+                                          const k4a_image_t color_image)
+    {
+        int depth_image_width_pixels = k4a_image_get_width_pixels(depth_image);
+        int depth_image_height_pixels = k4a_image_get_height_pixels(depth_image);
+        k4a_image_t transformed_color_image = NULL;
+        if (K4A_RESULT_SUCCEEDED != k4a_image_create(K4A_IMAGE_FORMAT_COLOR_BGRA32,
+                                                    depth_image_width_pixels,
+                                                    depth_image_height_pixels,
+                                                    depth_image_width_pixels * 4 * (int)sizeof(uint8_t),
+                                                    &transformed_color_image))
+        {
+            printf("Failed to create transformed color image\n");
+            return return_type::error;
+        }
+
+        k4a_image_t point_cloud_image = NULL;
+        if (K4A_RESULT_SUCCEEDED != k4a_image_create(K4A_IMAGE_FORMAT_CUSTOM,
+                                                    depth_image_width_pixels,
+                                                    depth_image_height_pixels,
+                                                    depth_image_width_pixels * 3 * (int)sizeof(int16_t),
+                                                    &point_cloud_image))
+        {
+            printf("Failed to create point cloud image\n");
+            return return_type::error;
+        }
+
+        if (K4A_RESULT_SUCCEEDED != k4a_transformation_color_image_to_depth_camera(transformation_handle,
+                                                                                  depth_image,
+                                                                                  color_image,
+                                                                                  transformed_color_image))
+        {
+            printf("Failed to compute transformed color image\n");
+            return return_type::error;
+        }
+
+        if (K4A_RESULT_SUCCEEDED != k4a_transformation_depth_image_to_point_cloud(transformation_handle,
+                                                                                  depth_image,
+                                                                                  K4A_CALIBRATION_TYPE_DEPTH,
+                                                                                  point_cloud_image))
+        {
+            printf("Failed to compute point cloud\n");
+            return return_type::error;
+        }
+
+        std::vector<color_point_t> points;
+
+        int width = k4a_image_get_width_pixels(point_cloud_image);
+        int height = k4a_image_get_height_pixels(transformed_color_image);
+
+        int16_t *point_cloud_image_data = (int16_t *)(void *)k4a_image_get_buffer(point_cloud_image);
+        uint8_t *color_image_data = k4a_image_get_buffer(transformed_color_image);
+
+        for (int i = 0; i < width * height; i++)
+        {
+            color_point_t point;
+            point.xyz[0] = point_cloud_image_data[3 * i + 0];
+            point.xyz[1] = point_cloud_image_data[3 * i + 1];
+            point.xyz[2] = point_cloud_image_data[3 * i + 2];
+            if (point.xyz[2] == 0)
+            {
+                continue;
+            }
+
+            point.rgb[0] = color_image_data[4 * i + 0];
+            point.rgb[1] = color_image_data[4 * i + 1];
+            point.rgb[2] = color_image_data[4 * i + 2];
+            uint8_t alpha = color_image_data[4 * i + 3];
+
+            if (point.rgb[0] == 0 && point.rgb[1] == 0 && point.rgb[2] == 0 && alpha == 0)
+            {
+                continue;
+            }
+
+            points.push_back(point);
+        }
+
+        // convert the points to a point cloud of Mat type
+        _point_cloud = cv::Mat(points.size(), 6, CV_32F);
+        for (size_t i = 0; i < points.size(); i++)
+        {
+            _point_cloud.at<float>(i, 0) = points[i].xyz[0];
+            _point_cloud.at<float>(i, 1) = points[i].xyz[1];
+            _point_cloud.at<float>(i, 2) = points[i].xyz[2];
+            _point_cloud.at<float>(i, 3) = points[i].rgb[2];
+            _point_cloud.at<float>(i, 4) = points[i].rgb[1];
+            _point_cloud.at<float>(i, 5) = points[i].rgb[0];
+        }
+        
+
+        // Save the point cloud to a ply file
+        //write_ply_from_points_vector(points, "../plugin_skeletonizer_3D/test_points.ply");
+        //write_ply_from_cv_mat(_point_cloud, "../plugin_skeletonizer_3D/test_cv_mat.ply");
+
+        return return_type::success;
+    }
+
+    // Write the point cloud to a ply file
+    void write_ply_from_cv_mat(cv::Mat point_cloud, const char *file_name){
+
+    #define PLY_START_HEADER "ply"
+    #define PLY_END_HEADER "end_header"
+    #define PLY_ASCII "format ascii 1.0"
+    #define PLY_ELEMENT_VERTEX "element vertex"
+
+        // save to the ply file
+        std::ofstream ofs(file_name); // text mode first
+        ofs << PLY_START_HEADER << std::endl;
+        ofs << PLY_ASCII << std::endl;
+        ofs << PLY_ELEMENT_VERTEX << " " << point_cloud.rows << std::endl;
+        ofs << "property float x" << std::endl;
+        ofs << "property float y" << std::endl;
+        ofs << "property float z" << std::endl;
+        ofs << "property uchar red" << std::endl;
+        ofs << "property uchar green" << std::endl;
+        ofs << "property uchar blue" << std::endl;
+        ofs << PLY_END_HEADER << std::endl;
+        ofs.close();
+
+        std::stringstream ss;
+        for (int i = 0; i < point_cloud.rows; ++i)
+        {
+          ss << point_cloud.at<float>(i, 0) << " " << point_cloud.at<float>(i, 1) << " " << point_cloud.at<float>(i, 2);
+          ss << " " << point_cloud.at<float>(i, 3) << " " << point_cloud.at<float>(i, 4) << " " << point_cloud.at<float>(i, 5);
+          ss << std::endl;
+        }
+        std::ofstream ofs_text(file_name, std::ios::out | std::ios::app);
+        ofs_text.write(ss.str().c_str(), (std::streamsize)ss.str().length());
+    }
+
+    // Write the point cloud to a ply file
+    static void write_ply_from_points_vector(std::vector<color_point_t> points,
+                                                const char *file_name){
+
+    #define PLY_START_HEADER "ply"
+    #define PLY_END_HEADER "end_header"
+    #define PLY_ASCII "format ascii 1.0"
+    #define PLY_ELEMENT_VERTEX "element vertex"
+
+        // save to the ply file
+        std::ofstream ofs(file_name); // text mode first
+        ofs << PLY_START_HEADER << std::endl;
+        ofs << PLY_ASCII << std::endl;
+        ofs << PLY_ELEMENT_VERTEX << " " << points.size() << std::endl;
+        ofs << "property float x" << std::endl;
+        ofs << "property float y" << std::endl;
+        ofs << "property float z" << std::endl;
+        ofs << "property uchar red" << std::endl;
+        ofs << "property uchar green" << std::endl;
+        ofs << "property uchar blue" << std::endl;
+        ofs << PLY_END_HEADER << std::endl;
+        ofs.close();
+
+        std::stringstream ss;
+        for (size_t i = 0; i < points.size(); ++i)
+        {
+            // image data is BGR
+            ss << (float)points[i].xyz[0] << " " << (float)points[i].xyz[1] << " " << (float)points[i].xyz[2];
+            ss << " " << (float)points[i].rgb[2] << " " << (float)points[i].rgb[1] << " " << (float)points[i].rgb[0];
+            ss << std::endl;
+        }
+        std::ofstream ofs_text(file_name, std::ios::out | std::ios::app);
+        ofs_text.write(ss.str().c_str(), (std::streamsize)ss.str().length());
+    }
+
+    #endif
   }
-
-  #ifdef KINECT_AZURE
-  return_type create_point_cloud(k4a_transformation_t transformation_handle,
-                                       const k4a_image_t depth_image,
-                                       const k4a_image_t color_image)
-{
-    int depth_image_width_pixels = k4a_image_get_width_pixels(depth_image);
-    int depth_image_height_pixels = k4a_image_get_height_pixels(depth_image);
-    k4a_image_t transformed_color_image = NULL;
-    if (K4A_RESULT_SUCCEEDED != k4a_image_create(K4A_IMAGE_FORMAT_COLOR_BGRA32,
-                                                 depth_image_width_pixels,
-                                                 depth_image_height_pixels,
-                                                 depth_image_width_pixels * 4 * (int)sizeof(uint8_t),
-                                                 &transformed_color_image))
-    {
-        printf("Failed to create transformed color image\n");
-        return return_type::error;
-    }
-
-    k4a_image_t point_cloud_image = NULL;
-    if (K4A_RESULT_SUCCEEDED != k4a_image_create(K4A_IMAGE_FORMAT_CUSTOM,
-                                                 depth_image_width_pixels,
-                                                 depth_image_height_pixels,
-                                                 depth_image_width_pixels * 3 * (int)sizeof(int16_t),
-                                                 &point_cloud_image))
-    {
-        printf("Failed to create point cloud image\n");
-        return return_type::error;
-    }
-
-    if (K4A_RESULT_SUCCEEDED != k4a_transformation_color_image_to_depth_camera(transformation_handle,
-                                                                               depth_image,
-                                                                               color_image,
-                                                                               transformed_color_image))
-    {
-        printf("Failed to compute transformed color image\n");
-        return return_type::error;
-    }
-
-    if (K4A_RESULT_SUCCEEDED != k4a_transformation_depth_image_to_point_cloud(transformation_handle,
-                                                                              depth_image,
-                                                                              K4A_CALIBRATION_TYPE_DEPTH,
-                                                                              point_cloud_image))
-    {
-        printf("Failed to compute point cloud\n");
-        return return_type::error;
-    }
-
-    std::vector<color_point_t> points;
-
-    int width = k4a_image_get_width_pixels(point_cloud_image);
-    int height = k4a_image_get_height_pixels(transformed_color_image);
-
-    int16_t *point_cloud_image_data = (int16_t *)(void *)k4a_image_get_buffer(point_cloud_image);
-    uint8_t *color_image_data = k4a_image_get_buffer(transformed_color_image);
-
-    for (int i = 0; i < width * height; i++)
-    {
-        color_point_t point;
-        point.xyz[0] = point_cloud_image_data[3 * i + 0];
-        point.xyz[1] = point_cloud_image_data[3 * i + 1];
-        point.xyz[2] = point_cloud_image_data[3 * i + 2];
-        if (point.xyz[2] == 0)
-        {
-            continue;
-        }
-
-        point.rgb[0] = color_image_data[4 * i + 0];
-        point.rgb[1] = color_image_data[4 * i + 1];
-        point.rgb[2] = color_image_data[4 * i + 2];
-        uint8_t alpha = color_image_data[4 * i + 3];
-
-        if (point.rgb[0] == 0 && point.rgb[1] == 0 && point.rgb[2] == 0 && alpha == 0)
-        {
-            continue;
-        }
-
-        points.push_back(point);
-    }
-
-    // convert the points to a point cloud of Mat type
-    _point_cloud = cv::Mat(points.size(), 6, CV_32F);
-    for (size_t i = 0; i < points.size(); i++)
-    {
-        _point_cloud.at<float>(i, 0) = points[i].xyz[0];
-        _point_cloud.at<float>(i, 1) = points[i].xyz[1];
-        _point_cloud.at<float>(i, 2) = points[i].xyz[2];
-        _point_cloud.at<float>(i, 3) = points[i].rgb[2];
-        _point_cloud.at<float>(i, 4) = points[i].rgb[1];
-        _point_cloud.at<float>(i, 5) = points[i].rgb[0];
-    }
-    
-
-    // Save the point cloud to a ply file
-    //write_ply_from_points_vector(points, "../plugin_skeletonizer_3D/test_points.ply");
-    //write_ply_from_cv_mat(_point_cloud, "../plugin_skeletonizer_3D/test_cv_mat.ply");
-
-    return return_type::success;
-}
-
-// Write the point cloud to a ply file
-void write_ply_from_cv_mat(cv::Mat point_cloud, const char *file_name){
-
-#define PLY_START_HEADER "ply"
-#define PLY_END_HEADER "end_header"
-#define PLY_ASCII "format ascii 1.0"
-#define PLY_ELEMENT_VERTEX "element vertex"
-
-    // save to the ply file
-    std::ofstream ofs(file_name); // text mode first
-    ofs << PLY_START_HEADER << std::endl;
-    ofs << PLY_ASCII << std::endl;
-    ofs << PLY_ELEMENT_VERTEX << " " << point_cloud.rows << std::endl;
-    ofs << "property float x" << std::endl;
-    ofs << "property float y" << std::endl;
-    ofs << "property float z" << std::endl;
-    ofs << "property uchar red" << std::endl;
-    ofs << "property uchar green" << std::endl;
-    ofs << "property uchar blue" << std::endl;
-    ofs << PLY_END_HEADER << std::endl;
-    ofs.close();
-
-    std::stringstream ss;
-    for (int i = 0; i < point_cloud.rows; ++i)
-    {
-      ss << point_cloud.at<float>(i, 0) << " " << point_cloud.at<float>(i, 1) << " " << point_cloud.at<float>(i, 2);
-      ss << " " << point_cloud.at<float>(i, 3) << " " << point_cloud.at<float>(i, 4) << " " << point_cloud.at<float>(i, 5);
-      ss << std::endl;
-    }
-    std::ofstream ofs_text(file_name, std::ios::out | std::ios::app);
-    ofs_text.write(ss.str().c_str(), (std::streamsize)ss.str().length());
-}
-
-// Write the point cloud to a ply file
-static void write_ply_from_points_vector(std::vector<color_point_t> points,
-                                             const char *file_name){
-
-#define PLY_START_HEADER "ply"
-#define PLY_END_HEADER "end_header"
-#define PLY_ASCII "format ascii 1.0"
-#define PLY_ELEMENT_VERTEX "element vertex"
-
-    // save to the ply file
-    std::ofstream ofs(file_name); // text mode first
-    ofs << PLY_START_HEADER << std::endl;
-    ofs << PLY_ASCII << std::endl;
-    ofs << PLY_ELEMENT_VERTEX << " " << points.size() << std::endl;
-    ofs << "property float x" << std::endl;
-    ofs << "property float y" << std::endl;
-    ofs << "property float z" << std::endl;
-    ofs << "property uchar red" << std::endl;
-    ofs << "property uchar green" << std::endl;
-    ofs << "property uchar blue" << std::endl;
-    ofs << PLY_END_HEADER << std::endl;
-    ofs.close();
-
-    std::stringstream ss;
-    for (size_t i = 0; i < points.size(); ++i)
-    {
-        // image data is BGR
-        ss << (float)points[i].xyz[0] << " " << (float)points[i].xyz[1] << " " << (float)points[i].xyz[2];
-        ss << " " << (float)points[i].rgb[2] << " " << (float)points[i].rgb[1] << " " << (float)points[i].rgb[0];
-        ss << std::endl;
-    }
-    std::ofstream ofs_text(file_name, std::ios::out | std::ios::app);
-    ofs_text.write(ss.str().c_str(), (std::streamsize)ss.str().length());
-}
-
-  #endif
 
   /**
    * @brief Acquire a frame from a camera device. Camera ID is defined in the
@@ -554,8 +568,145 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
 
     if (dummy)
     {
-      // TODO: load a file
-      throw invalid_argument("ERROR: Dummy not implemented");
+      static string folder_path = "/home/mads/Desktop/DUMMYCOV3D";  // CHANGE PATH
+      
+      // LOAD JSON (joints positions)
+      static json frames_json;
+      vector<string> json_files;
+      static bool json_loaded = false;
+
+      if (!json_loaded) {        
+        cv::glob(folder_path + "/*.json", json_files);
+
+        if (json_files.empty()) {
+          cout << "ERROR: No JSON files found in the folder: " << folder_path << endl;
+          return return_type::error;
+        }
+
+        string json_file_path = json_files[0];  
+        ifstream json_file(json_file_path);
+        if (json_file.is_open()) {
+          json_file >> frames_json;
+          json_file.close();
+          json_loaded = true;
+          cout << "INFO: JSON file loaded successfully: " << json_file_path << endl;
+        } else {
+          cout << "ERROR: Failed to load JSON file." << endl;
+          return return_type::error;
+        }
+      }  
+
+      // LOAD TXT (camera intrinsic parameters)
+      std::vector<std::string> txt_files;
+      static bool txt_loaded = false;
+
+      if (!txt_loaded) {
+        for (const auto& entry : std::filesystem::directory_iterator(folder_path)) {
+            if (entry.path().extension() == ".txt") {
+                txt_files.push_back(entry.path().string());
+            }
+        }
+
+        if (txt_files.empty()) {
+            std::cout << "ERROR: No TXT files found in the folder: " << folder_path << std::endl;
+            return return_type::error;
+        }
+
+        std::string txt_file_path = txt_files[0];  
+        std::ifstream txt_file(txt_file_path);
+        
+        if (txt_file.is_open()) {
+            std::string line;
+            
+            while (std::getline(txt_file, line)) {
+                if (line.find("cx:") == 0) {
+                    _c_x = std::stof(line.substr(4));  
+                }
+                else if (line.find("cy:") == 0) {
+                    _c_y = std::stof(line.substr(4)); 
+                }
+                else if (line.find("fx:") == 0) {
+                    _f_x = std::stof(line.substr(4));  
+                }
+                else if (line.find("fy:") == 0) {
+                    _f_y = std::stof(line.substr(4));  
+                }
+            }
+            
+            txt_file.close();
+            txt_loaded = true;
+            std::cout << "INFO: TXT file loaded successfully: " << txt_file_path << std::endl;
+            cout << "cx = " << _c_x << "  " << "cy = " << _c_y << "  " << "fx = " << _f_x << "  " << "fy = " << _f_y << endl;
+        } else {
+            std::cout << "ERROR: Failed to load TXT file." << std::endl;
+            return return_type::error;
+        }
+    }
+
+      // LOAD IMAGES (rgb)
+      static vector<string> image_files;
+      static size_t current_index = 0;
+
+      if (image_files.empty()) {
+          cv::glob(folder_path + "/RGB/*.png", image_files); 
+
+          if (image_files.empty()) {
+            cout << "ERROR: No PNG images found in the folder: " << folder_path << endl;
+            return return_type::error;
+          }
+
+          cout << "INFO: Found " << image_files.size() << " images in the folder." << endl;
+      }
+
+      // READ
+      if (!image_files.empty()) {
+          _rgb = cv::imread(image_files[current_index]);
+          if (_rgb.empty()) {
+              cout << "ERROR: Failed to load image" << endl;
+              return return_type::error;
+          } else {
+              cout << "INFO: Loaded image: " << image_files[current_index] << endl;
+          }
+
+          if (current_index < frames_json["frames"].size()) {
+            const auto& frame = frames_json["frames"][current_index];
+            int frame_id = frame["frame_id"];  
+            std::cout << "Processing frame_id: " << frame_id << std::endl;
+
+            if (frame["bodies"].is_array() && !frame["bodies"].empty()) { // At least one body in the frame
+                const auto& body = frame["bodies"][0]; // I take the first one
+
+                int jj = 0;
+                for (const auto& joint_position : body["joint_positions"]) {
+                    _keypoints_listTOF[jj].x = joint_position[0];
+                    _keypoints_listTOF[jj].y = joint_position[1];
+                    _keypoints_listTOF[jj].z = joint_position[2];
+                    jj++;   
+                }
+
+                //std::cout << "joints first body " << frame_id << " (total 18 joints):" << std::endl;
+                //for (const auto& point : _keypoints_listTOF) {
+                //    std::cout << "(" << point.x << ", " << point.y << ", " << point.z << ")" << std::endl;
+                //}
+            } else {
+                std::cerr << "ERROR: No body. " << frame_id << std::endl;
+                return return_type::error;
+            }
+          }
+
+          current_index++;
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+      if (current_index >= image_files.size()) {
+              cout << "INFO: Reached the end of the image list. Stopping..." << endl;
+              return return_type::error;
+          }
+      } else {
+          cout << "ERROR: No images loaded." << endl;
+          return return_type::error;
+      }
+
+
     }
     else
     {
@@ -669,12 +820,9 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
         frame_result_json["cov"][keypoint_name] = { confidence_level };
       }
 
-      // ALE
       for (int i = 0; i < 18; ++i) {
-          std::string keypoint_name_tmp = keypoints_map[i]; 
-          
+          std::string keypoint_name_tmp = keypoints_map[i];           
           for (const auto& [index, keypoint_azure_name] : keypoints_map_azure) {
-              
               if (keypoint_azure_name == keypoint_name_tmp) {
                   k4a_float3_t position = body.skeleton.joints[index].position;
                   _keypoints_listTOF[i] = cv::Point3f(position.v[0], position.v[1], position.v[2]);
@@ -829,25 +977,24 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
   {
     if (_pipeline->isReadyToProcess())
     {
-      if (is_raspberry_pi()) {
-        if (!_camera.getVideoFrame(_rgb, 100)) {
-          // Input stream is over
-          return return_type::warning;
-        }
-      } else { 
-        _cap >> _rgb;
+      if(_dummy){
         if (_rgb.empty()) {
-          // Input stream is over
           return return_type::error;
         }
+      }else{
+        if (is_raspberry_pi()) {
+          if (!_camera.getVideoFrame(_rgb, 100)) {
+            // Input stream is over
+            return return_type::warning;
+          }
+        } else { 
+          _cap >> _rgb;
+          if (_rgb.empty()) {
+            // Input stream is over
+            return return_type::error;
+          }
+        }
       }
-
-      /* 
-      if (_rgb.empty()) {
-        // Input stream is over
-        return return_type::error;
-      }
-      */
 
       _frame_num = _pipeline->submitData(
           ImageInputData(_rgb), make_shared<ImageMetaData>(_rgb, _start_time));
@@ -1089,13 +1236,8 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
    * @return result status ad defined in return_type
    */
   return_type cov3D_compute(bool debug = false) { 
-    #ifdef KINECT_AZURE
-
-      float fx = colorAzure_intrinsics.parameters.param.fx;
-      float fy = colorAzure_intrinsics.parameters.param.fy;
-      float cx = colorAzure_intrinsics.parameters.param.cx;
-      float cy = colorAzure_intrinsics.parameters.param.cy;
-
+    
+    if(_dummy){
       if (_keypoints_list.size() > 0) 
       { // at least one person
         for (size_t i = 0; i < _cov2D.size(); ++i)
@@ -1106,12 +1248,12 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
           !(_cov2D_TMP.array() == -1).all()) {
 
             float Z_tmp = _keypoints_listTOF[i].z;
-            float sigma_z = 0.015 * Z_tmp + 2; // KINECT AZURE model
+            float sigma_z = (_keypoints_listTOF[i].z/1000); // TO DO CHECK A GOOD MODEL 0.015 * Z_tmp + 2; 
             float variance_z = sigma_z * sigma_z;
 
             Eigen::Matrix<float, 3 , 2> J;
-            J << Z/f_x,  0,
-                  0   ,  Z/f_y,
+            J << Z_tmp/_f_x,  0,
+                  0   ,  Z_tmp/_f_y,
                   0   ,  0; 
 
             Eigen::Matrix3f covMatrixZ;
@@ -1129,91 +1271,200 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
         }
       }
 
-      _cov2D.clear(); // before clean databese
-      _cov3D.clear();
-
-      return return_type::success; 
-    #else
-
-      // RASPI
-      // Intrinsic parameters
-      float f_mm = 6; // focal length in mm https://grobotronics.com/raspberry-pi-hq-camera-lens-6mm-wide-angle.html?sl=en
-      // Sensor dimensions:
-      float d_x = (4056*1.55)/1000; // https://www.waveshare.com/wiki/Raspberry_Pi_HQ_Camera
-      float d_y = (3040*1.55)/1000;
-      
-      int H = _rgb.rows; // image size after resize
-      int W = _rgb.cols;
-
-      float f_x = (f_mm * W)/d_x; // focal length in pixel 
-      float f_y = (f_mm * H)/d_y; // focal length in pixel
-
-      float c_x = W/2; // coordinate of the principal point
-      float c_y = H/2;
-
-      float Hp = 500; // Real "height" of the selected person in mm between nec and hip 
-      float sigmaHp = 2; // mm
-
-      if (_keypoints_list.size() > 0) 
-      { // at least one person
-        if (_keypoints_list[1].x > 0 && _keypoints_list[1].y > 0 && _keypoints_list[8].x > 0 && _keypoints_list[8].y > 0 && _keypoints_list[11].x > 0 && _keypoints_list[11].y > 0)
-        { // 1 = NEC_     8 = HIPR    11 = HIPL
-    
-          float v_nec = _keypoints_list[1].y;
-          float v_hip_tmp = fabs(_keypoints_list[11].y - _keypoints_list[8].y) / 2.0f;
-          float v_hip;
-          if (_keypoints_list[11].y < _keypoints_list[8].y)
-          {
-            v_hip = v_hip_tmp + _keypoints_list[11].y;
-          }else{
-            v_hip = v_hip_tmp + _keypoints_list[8].y;
-          }
-          
-          float Z = (f_y * Hp) / fabs(v_hip - v_nec);
-
-          //cout << "Z---------->    " << Z << endl;
-          Eigen::Matrix2f _cov2D_NEC = _cov2D[1];
-          float variance_necY = _cov2D_NEC(1,1);
-
-          Eigen::Matrix2f _cov2D_HIP = (_cov2D[11] + _cov2D[8]) / 2.0;
-          float variance_hipY = _cov2D_HIP(1,1);
-
-          for (size_t i = 0; i < _cov2D.size(); ++i)
-            {
-              Eigen::Matrix2f _cov2D_TMP = _cov2D[i];
-              if (!(_cov2D_TMP.array() == -1).all()) 
-              {
-                Eigen::Matrix<float, 3 , 2> J;
-                J << Z/f_x,  0,
-                      0   ,  Z/f_y,
-                      0   ,  0;
-                
-                float variance_z_Hp = pow(f_y / fabs(v_hip - v_nec),2) * pow(sigmaHp,2);
-                float variance_z_nec = pow(f_y*Hp/pow(v_hip - v_nec,2),2) * variance_necY;
-                float variance_z_hip = pow(f_y*Hp/pow(v_hip - v_nec,2),2) * variance_hipY;
-                float variance_z = variance_z_Hp + variance_z_nec + variance_z_hip; 
-
-                Eigen::Matrix3f covMatrixZ;
-                covMatrixZ << 0,  0,  0,
-                              0,  0,  0,
-                              0,  0,  variance_z;  
-
-                Eigen::Matrix3f covMatrix3D = J * _cov2D_TMP * J.transpose() + covMatrixZ;
-                _cov3D.push_back(covMatrix3D);
-              } else {
-                Eigen::Matrix3f covMatrixZ_NaN;
-                covMatrixZ_NaN.setConstant(-1);
-                _cov3D.push_back(covMatrixZ_NaN);
-              }
-            }
-        }
+      // SAVE
+      json json_cov3D;
+      std::ifstream input_file("cov3D_data.json");
+      if (input_file.is_open()) {
+          input_file >> json_cov3D;
+          input_file.close();
       }
 
-      _cov2D.clear(); // before clean databese
+      static int frame_counter = 0;  
+
+      json frame_data;
+      frame_data["frame"] = frame_counter;
+      json cov_matrix_list;
+
+      for (size_t i = 0; i < _cov3D.size(); ++i) {
+          json cov_matrix_3x3;
+          
+          for (int row = 0; row < 3; ++row) {
+              cov_matrix_3x3.push_back({
+                  _cov3D[i](row, 0), _cov3D[i](row, 1), _cov3D[i](row, 2)
+              });
+          }
+
+          cov_matrix_list.push_back(cov_matrix_3x3);
+      }
+
+      frame_data["cov3D"] = cov_matrix_list;
+      
+      json_cov3D.push_back(frame_data);
+
+      std::ofstream output_file("cov3D_data.json");
+      output_file << json_cov3D.dump(4);  
+      output_file.close();
+    
+      frame_counter++;
+
+      // CLEAN
+      _cov2D.clear();
       _cov3D.clear();
-  
-      return return_type::success; 
-    #endif
+
+    }else{
+      #ifdef KINECT_AZURE
+
+        float _f_x = 100; // CHECK HOW TO DO colorAzure_intrinsics.parameters.param.fx;
+        float _f_y = 100; // CHECK HOW TO DO colorAzure_intrinsics.parameters.param.fy;
+
+        if (_keypoints_list.size() > 0) 
+        { // at least one person
+          for (size_t i = 0; i < _cov2D.size(); ++i)
+          {
+            Eigen::Matrix2f _cov2D_TMP = _cov2D[i];
+
+            if (!(_keypoints_listTOF[i].x == -1 && _keypoints_listTOF[i].y == -1 && _keypoints_listTOF[i].z == -1) &&
+            !(_cov2D_TMP.array() == -1).all()) {
+
+              float Z_tmp = _keypoints_listTOF[i].z;
+              float sigma_z = 0.015 * Z_tmp + 2; // KINECT AZURE model
+              float variance_z = sigma_z * sigma_z;
+
+              Eigen::Matrix<float, 3 , 2> J;
+              J << Z_tmp/_f_x,  0,
+                    0   ,  Z_tmp/_f_y,
+                    0   ,  0; 
+
+              Eigen::Matrix3f covMatrixZ;
+              covMatrixZ << 0,  0,  0,
+                            0,  0,  0,
+                            0,  0,  variance_z;  
+
+              Eigen::Matrix3f covMatrix3D = J * _cov2D_TMP * J.transpose() + covMatrixZ;
+              _cov3D.push_back(covMatrix3D);
+            } else {
+              Eigen::Matrix3f covMatrixZ_NaN;
+              covMatrixZ_NaN.setConstant(-1);
+              _cov3D.push_back(covMatrixZ_NaN);
+            }
+          }
+        }
+
+        _cov2D.clear(); // before clean databese
+        _cov3D.clear();
+
+      #else
+
+        // RASPI
+        // Intrinsic parameters
+        float f_mm = 6; // focal length in mm https://grobotronics.com/raspberry-pi-hq-camera-lens-6mm-wide-angle.html?sl=en
+        // Sensor dimensions:
+        float d_x = (4056*1.55)/1000; // https://www.waveshare.com/wiki/Raspberry_Pi_HQ_Camera
+        float d_y = (3040*1.55)/1000;
+        
+        int H = _rgb.rows; // image size after resize
+        int W = _rgb.cols;
+
+        _f_x = (f_mm * W)/d_x; // focal length in pixel 
+        _f_y = (f_mm * H)/d_y; // focal length in pixel
+
+        _c_x = W/2; // coordinate of the principal point
+        _c_y = H/2;
+
+        float Hp = 500; // Real "height" of the selected person in mm between nec and hip 
+        float sigmaHp = 2; // mm
+
+        if (_keypoints_list.size() > 0) 
+        { // at least one person
+          if (  ((_keypoints_list[2].y > 0) || (_keypoints_list[5].y > 0))  && ((_keypoints_list[8].y > 0) || (_keypoints_list[11].y > 0)) )
+          { // 2 = SHOR      5 = SHOL     8 = HIPR       11 = HIPL           
+      
+            float v_sho_tmp;
+            float v_sho;
+            Eigen::Matrix2f cov2D_SHO;
+            if( _keypoints_list[2].y > 0 && _keypoints_list[5].y > 0){
+              v_sho_tmp = fabs(_keypoints_list[2].y - _keypoints_list[5].y) / 2.0f;
+              if (_keypoints_list[2].y < _keypoints_list[5].y)
+              {
+                v_sho = v_sho_tmp + _keypoints_list[2].y;
+              }else{
+                v_sho = v_sho_tmp + _keypoints_list[5].y;
+              }
+              cov2D_SHO = (_cov2D[2] + _cov2D[5]) / 2.0;
+            }else if ( _keypoints_list[2].y > 0){
+              v_sho = _keypoints_list[2].y;
+              cov2D_SHO = _cov2D[2];
+            }else {
+              v_sho = _keypoints_list[5].y;
+              cov2D_SHO = _cov2D[5];
+            }
+            float variance_shoY = cov2D_SHO(1,1);
+
+            float v_hip_tmp;
+            float v_hip;
+            Eigen::Matrix2f cov2D_HIP;
+            if( _keypoints_list[8].y > 0 && _keypoints_list[11].y > 0){
+              v_hip_tmp = fabs(_keypoints_list[8].y - _keypoints_list[11].y) / 2.0f;
+              if (_keypoints_list[8].y < _keypoints_list[11].y)
+              {
+                v_hip = v_hip_tmp + _keypoints_list[8].y;
+              }else{
+                v_hip = v_hip_tmp + _keypoints_list[11].y;
+              }
+              cov2D_HIP = (_cov2D[11] + _cov2D[8]) / 2.0;
+            }else if ( _keypoints_list[8].y > 0){
+              v_hip = _keypoints_list[8].y;
+              cov2D_HIP = _cov2D[8];
+            }else {
+              v_hip = _keypoints_list[11].y;
+              cov2D_HIP = _cov2D[11];
+            }
+            float variance_hipY = cov2D_HIP(1,1);
+            
+            float Z = (_f_y * Hp) / fabs(v_hip - v_sho);
+
+            //cout << "Z---------->    " << Z << endl;
+            
+
+            for (size_t i = 0; i < _cov2D.size(); ++i)
+              {
+                Eigen::Matrix2f cov2D_TMP = _cov2D[i];
+                if (!(cov2D_TMP.array() == -1).all()) 
+                {
+                  Eigen::Matrix<float, 3 , 2> J;
+                  J << Z/_f_x,  0,
+                        0   ,  Z/_f_y,
+                        0   ,  0;
+                  
+                  float variance_z_Hp = pow(_f_y / fabs(v_hip - v_sho),2) * pow(sigmaHp,2);
+                  float variance_z_sho = pow(_f_y*Hp/pow(v_hip - v_sho,2),2) * variance_shoY;
+                  float variance_z_hip = pow(_f_y*Hp/pow(v_hip - v_sho,2),2) * variance_hipY;
+                  float variance_z = variance_z_Hp + variance_z_sho + variance_z_hip; 
+
+                  Eigen::Matrix3f covMatrixZ;
+                  covMatrixZ << 0,  0,  0,
+                                0,  0,  0,
+                                0,  0,  variance_z;  
+
+                  Eigen::Matrix3f covMatrix3D = J * cov2D_TMP * J.transpose() + covMatrixZ;
+                  _cov3D.push_back(covMatrix3D);
+                } else {
+                  Eigen::Matrix3f covMatrixZ_NaN;
+                  covMatrixZ_NaN.setConstant(-1);
+                  _cov3D.push_back(covMatrixZ_NaN);
+                }
+              }
+          }
+        }
+
+        _cov2D.clear(); // TO DO: move it in get_output after database saving 
+        _cov3D.clear();
+    
+      #endif
+    }
+
+
+    return return_type::success;
 
   }
 
@@ -1281,7 +1532,7 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
     {
       _dummy = _params["dummy"];
     }
-
+    
     setup_VideoCapture();
     setup_OpenPoseModel();
     setup_Pipeline();
@@ -1304,33 +1555,49 @@ static void write_ply_from_points_vector(std::vector<color_point_t> points,
     out.clear();
     out["agent_id"] = _agent_id;
 
-    acquire_frame(_dummy);
-    skeleton_from_depth_compute(_params["debug"]["skeleton_from_depth_compute"]);
-    point_cloud_filter(_params["debug"]["point_cloud_filter"]);
-    skeleton_from_rgb_compute(_params["debug"]["skeleton_from_rgb_compute"]);
-    if (!(_result))
-    {
-      return return_type::warning;
+    if (acquire_frame(_dummy) == return_type::error) {
+        return return_type::error;
     }
 
-    hessian_compute(_params["debug"]["hessian_compute"]);
+    if (skeleton_from_depth_compute(_params["debug"]["skeleton_from_depth_compute"]) == return_type::error) {
+        return return_type::error;
+    }
 
-    cov3D_compute(_params["debug"]["cov3D_compute"]);
+    if (point_cloud_filter(_params["debug"]["point_cloud_filter"]) == return_type::error) {
+        return return_type::error;
+    }
+
+    if (skeleton_from_rgb_compute(_params["debug"]["skeleton_from_rgb_compute"]) == return_type::error) {
+        return return_type::error;
+    }
+
+    if (hessian_compute(_params["debug"]["hessian_compute"]) == return_type::error) {
+        return return_type::error;
+    }
+
+    if (cov3D_compute(_params["debug"]["cov3D_compute"]) == return_type::error) {
+        return return_type::error;
+    }
 
     if (_params["debug"]["viewer"])
     {
-
-      Mat rgb_flipped;
-      flip(_rgb, rgb_flipped, 1);
-      if (rgb_flipped.empty()){
-        std::cout << "Failed to load image"<< std::endl;
+      if (_rgb.empty()) {
+        std::cout << "Failed to load image!" << std::endl;
         return return_type::warning;
       }else{
-        std::cout << "Image loaded"<< std::endl;
-        imshow("Human Pose Estimation Results", rgb_flipped);
+        Mat rgb_flipped;
+        flip(_rgb, rgb_flipped, 1);
+        if (rgb_flipped.empty()){
+          std::cout << "Failed to load image"<< std::endl;
+          return return_type::warning;
+        }else{
+          //std::cout << "Image loaded"<< std::endl;
+          imshow("Human Pose Estimation Results", rgb_flipped);
+        }
       }
 
       int max_depth;
+      
 #ifdef KINECT_AZURE
       // Configure the colormap range based on the depth mode
       // Values get from: https://docs.microsoft.com/en-us/azure/kinect-dk/hardware-specification
@@ -1455,6 +1722,12 @@ protected:
   uint32_t _frames_processed = 0;
   int64_t _frame_num = 0;
 
+  // Camera intrinsic parameters
+  float _f_x; // focal length in pixel 
+  float _f_y; // focal length in pixel
+  float _c_x; // coordinate of the principal point
+  float _c_y;
+
   bool _dummy = false;
 
   lccv::PiCamera _camera; // for Raspi
@@ -1464,7 +1737,8 @@ protected:
   int _rgb_height; /**< image size rows */
   int _rgb_width;  /**< image size cols */
   vector<cv::Point2i> _keypoints_list;
-  vector<cv::Point3f> _keypoints_listTOF = vector<cv::Point3f>(18, cv::Point3f(-1, -1, -1));
+  cv::Point3f _keypoints_listTOF[18];
+  //vector<cv::Point3f> _keypoints_listTOF = vector<cv::Point3f>(18, cv::Point3f(-1, -1, -1));
   vector<cv::Point3f> _keypoints_cov;
   string _model_file;
   string _agent_id;
