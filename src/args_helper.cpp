@@ -6,7 +6,7 @@
 #include "utils/slog.hpp"
 
 #ifdef _WIN32
-#include "w_dirent.hpp"
+#include <w_dirent.hpp>
 #else
 #include <dirent.h>
 #endif
