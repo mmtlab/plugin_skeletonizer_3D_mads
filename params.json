@@ -4,7 +4,7 @@
     "model_file": "models/human-pose-estimation-0001.xml",
     "resolution_rgb": "1280x720",
     "fps": 25,
-    "dummy": false,
+    "dummy": true,
     "debug": {
         "skeleton_from_depth_compute": false,
         "skeleton_from_rgb_compute": true,

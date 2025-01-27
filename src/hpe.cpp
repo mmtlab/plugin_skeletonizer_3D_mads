@@ -366,7 +366,7 @@ public:
         cv::resize(_rgb, _rgb, cv::Size(resolution.width, resolution.height));
       }
     }
-
+   
     _rgb_height = resolution.height; //_rgb.rows;
     _rgb_width = resolution.width;   //_rgb.cols;
     cout << "   RGB Camera resolution: " << _rgb_width << "x" << _rgb_height
@@ -752,10 +752,11 @@ public:
 #else
       if (is_raspberry_pi()) {
         _camera.getVideoFrame(_rgb, 100);
+      }else{
+         _cap >> _rgb;
       }
 
-      _cap >> _rgb;
-
+    
 #endif
 
       if (_rgb.empty()) {
@@ -1572,6 +1573,7 @@ public:
       max_depth = 2000;
 #endif
 
+#ifdef KINECT_AZURE
       Mat rgbd_flipped;
       flip(_rgbd_filtered, rgbd_flipped, 1);
       rgbd_flipped.convertTo(rgbd_flipped, CV_8U, 255.0 / max_depth);
@@ -1579,6 +1581,7 @@ public:
       applyColorMap(rgbd_flipped, rgbd_flipped_color,
                     COLORMAP_HSV); // Apply the colormap:
       imshow("rgbd", rgbd_flipped_color);
+#endif
 
       int key = cv::waitKey(1000.0 / _fps);
 
