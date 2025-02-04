@@ -206,7 +206,7 @@ public:
 #ifdef KINECT_AZURE
     _device.stop_cameras();
     _device.close();
-#else
+#elif __linux
     if (is_raspberry_pi()) {
       _camera.stopVideo();
     }
@@ -292,7 +292,7 @@ public:
 
       // colorAzure_intrinsics =
       // sensor_calibration.get_color_camera_calibration().intrinsics; // CHECK
-      // HOT TO DO
+      // HOW TO DO
 
       k4abt_tracker_configuration_t trackerConfig =
           K4ABT_TRACKER_CONFIG_DEFAULT;
@@ -322,7 +322,7 @@ public:
         _rgb = cv::Mat(rows, cols, CV_8UC4, (void *)buffer, cv::Mat::AUTO_STEP);
         cvtColor(_rgb, _rgb, cv::COLOR_BGRA2BGR);
       }
-#else
+#elif __linux
       if (is_raspberry_pi()) {
         std::cout << "It is running on a Raspi" << std::endl;
         _camera.options->video_width = rgb_width_read;   // 1280;
@@ -371,7 +371,7 @@ public:
     _rgb_width = resolution.width;   //_rgb.cols;
     cout << "   RGB Camera resolution: " << _rgb_width << "x" << _rgb_height
          << endl;
-
+  }
 #ifdef KINECT_AZURE
     return_type create_point_cloud(k4a_transformation_t transformation_handle,
                                    const k4a_image_t depth_image,
@@ -536,7 +536,7 @@ public:
     }
 
 #endif
-  }
+  
 
   /**
    * @brief Acquire a frame from a camera device. Camera ID is defined in the
@@ -555,8 +555,11 @@ public:
     // and translate the frame in OpenCV format
 
     if (dummy) {
+      /*
       static string folder_path =
-          "/home/mads/Desktop/DUMMYCOV3D"; // CHANGE PATH
+          "/home/mads/Desktop/DUMMYCOV3D"; // CHANGE PATH */
+
+      static string folder_path = "G:/Shared drives/MirrorWorld/Test/20241113/02_preprocessing/azure/sub_1_cond_10_run_2/DUMMYCOV3D_000417220812";    
 
       // LOAD JSON (joints positions)
       static json frames_json;
@@ -658,8 +661,41 @@ public:
           cout << "ERROR: Failed to load image" << endl;
           return return_type::error;
         } else {
-          cout << "INFO: Loaded image: " << image_files[current_index] << endl;
+          // cout << "INFO: Loaded image: " << image_files[current_index] << endl;
         }
+
+        // ADD BLACK BORDERS TO AVOID TWO PEOPLE IN THE IMAGE
+        int centerX = _rgb.cols / 2;
+        int centerY = _rgb.rows / 2;
+        int width = 450;  // Width of the center region to keep
+        int height = 600; // Height of the center region to keep
+
+        // Ensure the region is within the image bounds
+        int x1 = max(0, centerX - width / 2);
+        int y1 = max(0, centerY - height / 2);
+        int x2 = min(_rgb.cols, centerX + width / 2);
+        int y2 = min(_rgb.rows, centerY + height / 2);
+
+        // Create a copy of the image
+        Mat _rgb_clone = _rgb.clone();
+
+        // Draw black rectangles on the borders
+        // Top rectangle
+        rectangle(_rgb_clone, cv::Point(0, 0), cv::Point(_rgb.cols, y1), cv::Scalar(0, 0, 0), -1);
+        // Bottom rectangle
+        rectangle(_rgb_clone, cv::Point(0, y2), cv::Point(_rgb.cols, _rgb.rows), cv::Scalar(0, 0, 0), -1);
+        // Left rectangle
+        rectangle(_rgb_clone, cv::Point(0, y1), cv::Point(x1, y2), cv::Scalar(0, 0, 0), -1);
+        // Right rectangle
+        rectangle(_rgb_clone, cv::Point(x2, y1), cv::Point(_rgb.cols, y2), cv::Scalar(0, 0, 0), -1);
+
+        _rgb = _rgb_clone;
+
+        /*
+        // Display the result
+        imshow("Original Image", _rgb);
+        waitKey(0);
+        */
 
         if (current_index < frames_json["frames"].size()) {
           const auto &frame = frames_json["frames"][current_index];
@@ -749,7 +785,7 @@ public:
       // Debug function to save the point cloud in a .ply file
       // point_cloud_color_to_depth(_pc_transformation, depth_handle,
       // color_handle, "../plugin_skeletonizer_3D/test.ply");
-#else
+#elif __linux
       if (is_raspberry_pi()) {
         _camera.getVideoFrame(_rgb, 100);
       }else{
@@ -1102,7 +1138,7 @@ public:
           complex<data_t> V21_tmp = s.eigenvectors()(1, 0);
           data_t V21 = V21_tmp.real();
 
-          data_t perc_prob = 0.95;
+          data_t perc_prob = 0.68; // 95% confidence interval
           data_t xradius = sqrt(-D11 * (-2) * log(1 - perc_prob));
           data_t yradius = sqrt(-D22 * (-2) * log(1 - perc_prob));
 
@@ -1501,6 +1537,7 @@ public:
       return return_type::error;
     }
 
+    
     if (skeleton_from_depth_compute(
             _params["debug"]["skeleton_from_depth_compute"]) ==
         return_type::error) {
@@ -1511,6 +1548,7 @@ public:
         return_type::error) {
       return return_type::error;
     }
+    
 
     if (skeleton_from_rgb_compute(
             _params["debug"]["skeleton_from_rgb_compute"]) ==
@@ -1573,6 +1611,7 @@ public:
       max_depth = 2000;
 #endif
 
+
 #ifdef KINECT_AZURE
       Mat rgbd_flipped;
       flip(_rgbd_filtered, rgbd_flipped, 1);
@@ -1583,13 +1622,14 @@ public:
       imshow("rgbd", rgbd_flipped_color);
 #endif
 
+
       int key = cv::waitKey(1000.0 / _fps);
 
       // system("pause");
       if (27 == key || 'q' == key || 'Q' == key) { // Esc
 #ifdef KINECT_AZURE
         _device.close();
-#else
+#elif __linux
         if (is_raspberry_pi()) {
           _camera.stopVideo();
         }
@@ -1778,7 +1818,7 @@ int main(int argc, char const *argv[]) {
       // Every second calculate FPS and reset timer
       if (duration >= 1) {
         fps = frame_count / duration;
-        cout << "-----------------> FPS: " << fps << endl;
+        // cout << "-----------------> FPS: " << fps << endl;
 
         start_time = now;
         frame_count = 0;

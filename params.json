@@ -13,6 +13,6 @@
         "consistency_check": false,
         "point_cloud_filter": false,
         "coordinate_transfrom": false,
-        "viewer": true
+        "viewer": false
       }
 }
