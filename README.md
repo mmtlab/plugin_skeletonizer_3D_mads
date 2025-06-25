@@ -39,6 +39,7 @@ cmake --build build --config Release
 cmake --install build --config Release
 ```
 
+After building, copy the `hpe.exe` and `hpe.plugin` files from `usr/bin` to `usr/local/bin` within your MADS installation directory (for example, `C:\Program Files\MADS\usr\local\bin` on Windows).
 
 ## INI settings
 
@@ -46,10 +47,17 @@ The plugin supports the following settings in the INI file:
 
 ```ini
 [hpe]
-# Describe the settings available to the plugin
+pub_topic = "hpe"
+period = 30
+camera_device = 0
+azure_device = 0
+fps = 25
+CUDA = false
+model_file = "path/to/model/human-pose-estimation-0001.xml"
+dummy = false
+resolution_rgb = "1280x720"
+debug = {skeleton_from_depth_compute = false, skeleton_from_rgb_compute = false, hessian_compute = false, cov3D_compute = false, consistency_check = false, point_cloud_filter = false, coordinate_transfrom = false, viewer = false }
 ```
-
-All settings are optional; if omitted, the default values are used.
 
 
 ## Executable demo
