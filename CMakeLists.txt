@@ -31,7 +31,7 @@ set(FETCHCONTENT_QUIET OFF)
 if (UNIX)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
 endif()
-option(SKIP_KINECT_AZURE "Do not use Kinect Azure cameras" ON)
+option(SKIP_KINECT_AZURE "Do not use Kinect Azure cameras" OFF)
 
 if(UNIX AND NOT APPLE)
   target_compile_definitions(hpe PRIVATE __linux)
