@@ -752,6 +752,10 @@ public:
       }
 
     } else {
+      
+      // reset the start time
+      _start_time = chrono::steady_clock::now();
+
 #ifdef KINECT_AZURE
 
       // acquire and translate into _rgb and _rgbd
@@ -816,7 +820,6 @@ public:
         cv::resize(_rgb, _rgb, cv::Size(_rgb_width, _rgb_height));
       }
     }
-    _start_time = chrono::steady_clock::now();
 
     return return_type::success;
   }
@@ -833,6 +836,10 @@ public:
    * @return result status ad defined in return_type
    */
   return_type skeleton_from_depth_compute(bool debug = false) {
+    if (_dummy) {
+      // If dummy, I don't compute the skeleton
+      return return_type::success;
+    }
 #ifdef KINECT_AZURE
 
     if (!_tracker.enqueue_capture(_k4a_rgbd)) {
@@ -907,6 +914,10 @@ public:
    * @return result status ad defined in return_type
    */
   return_type point_cloud_filter(bool debug = false) {
+    if (_dummy) {
+      // If dummy, I don't filter the point cloud
+      return return_type::success;
+    }
 
 #ifdef KINECT_AZURE
     // get the body index map from _k4a_rgbd
@@ -1043,6 +1054,7 @@ public:
       renderHumanPose(_result->asRef<HumanPoseResult>(), _output_transform);
     }
     _frames_processed++;
+
     return return_type::success;
   }
 
@@ -1350,8 +1362,8 @@ public:
     } else {
 #ifdef KINECT_AZURE
 
-      float _f_x = 100; // CHECK HOW TO DO colorAzure_intrinsics.parameters.param.fx;
-      float _f_y = 100; // CHECK HOW TO DO colorAzure_intrinsics.parameters.param.fy;
+      float _f_x = 504.94; // CHECK HOW TO DO colorAzure_intrinsics.parameters.param.fx;
+      float _f_y = 505.044; // CHECK HOW TO DO colorAzure_intrinsics.parameters.param.fy;
 
       if (_keypoints_list_openpose.size() > 0) { // at least one person
         for (size_t i = 0; i < _cov2D_vec.size(); ++i) {
@@ -1589,6 +1601,7 @@ public:
 
     out.clear();
     out["agent_id"] = _agent_id;
+    out["ts"] = std::chrono::duration_cast<std::chrono::nanoseconds>(_start_time.time_since_epoch()).count(); 
 
     if (acquire_frame(_dummy) == return_type::error) {
       return return_type::error;
@@ -1668,6 +1681,7 @@ public:
       max_depth = 2000;
 #endif
 
+if (!_dummy) {
 
 #ifdef KINECT_AZURE
       Mat rgbd_flipped;
@@ -1678,12 +1692,15 @@ public:
                     COLORMAP_HSV); // Apply the colormap:
       imshow("rgbd", rgbd_flipped_color);
 #endif
+      }
 
 
       int key = cv::waitKey(1000.0 / _fps);
 
+
       // system("pause");
       if (27 == key || 'q' == key || 'Q' == key) { // Esc
+
 #ifdef KINECT_AZURE
         _device.close();
 #elif __linux
@@ -1692,6 +1709,7 @@ public:
         }
         _cap.release();
 #endif
+
         destroyAllWindows();
 
         return return_type::error;
