@@ -577,7 +577,7 @@ public:
       static string folder_path =
           "/home/mads/Desktop/DUMMYCOV3D"; // CHANGE PATH */
 
-      static string folder_path = "G:/Shared drives/MirrorWorld/Test/20241113/02_preprocessing/azure/sub_1_cond_5_run_1/DUMMYCOV3D_000515315312";    
+      static string folder_path = "C:/Users/marco/OneDrive/Desktop/DUMMYCOV3D";    
 
       // LOAD JSON (joints positions)
       static json frames_json;
@@ -1082,7 +1082,8 @@ public:
 
     // cout << "poses.size()-----> " << _poses_openpose.size() << endl;
     if (_poses_openpose.size() > 0) { // at least one person
-      /*
+      cout << "Sono qui" << endl;
+      
       for (auto &keypoint :
            _poses_openpose[0].keypoints) { // if I have more than one person, I take the
         // first with id[0]
@@ -1097,8 +1098,9 @@ public:
             keypoint.x,
             keypoint.y)); // I always have 18 keypoints, if there is no (-1,-1)
       }
-      */
+      
 
+      /*
         cv::Point2i center(_rgb_width / 2, _rgb_height / 2);
         int closest_person_index = -1;
         double min_distance = std::numeric_limits<double>::max();
@@ -1134,6 +1136,8 @@ public:
                 }
                 _keypoints_list_openpose.push_back(cv::Point2i(keypoint.x, keypoint.y));
             }
+          }*/
+      
 
       for (int ii = 0; ii < HPEOpenPose::keypointsNumber; ii++) {
 
@@ -1156,46 +1160,63 @@ public:
 
           data_t H_ri_ci = _heat_map.at<data_t>(_keypoints_list_openpose[ii].y,
                                                 _keypoints_list_openpose[ii].x);
+          cout << "H_ri_ci = " << H_ri_ci << endl;
           data_t H_ri_ciPLUSn = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y, _keypoints_list_openpose[ii].x + n_pixel);
+          cout << "H_ri_ciPLUSn = " << H_ri_ciPLUSn << endl;    
           data_t H_ri_ciMINn = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y, _keypoints_list_openpose[ii].x - n_pixel);
+          cout << "H_ri_ciMINn = " << H_ri_ciMINn << endl;
           data_t H_riPLUSn_ci = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y + n_pixel, _keypoints_list_openpose[ii].x);
+          cout << "H_riPLUSn_ci = " << H_riPLUSn_ci << endl;
           data_t H_riMINn_ci = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y - n_pixel, _keypoints_list_openpose[ii].x);
+          cout << "H_riMINn_ci = " << H_riMINn_ci << endl;
 
-          data_t H22 = (1.0 / (n_pixel * n_pixel)) *
-                       (H_ri_ciPLUSn - 2 * H_ri_ci + H_ri_ciMINn);
           data_t H11 = (1.0 / (n_pixel * n_pixel)) *
+                       (H_ri_ciPLUSn - 2 * H_ri_ci + H_ri_ciMINn);
+          cout << "H11 = " << H11 << endl;
+          data_t H22 = (1.0 / (n_pixel * n_pixel)) *
                        (H_riPLUSn_ci - 2 * H_ri_ci + H_riMINn_ci);
+          cout << "H22 = " << H22 << endl;
 
           data_t H_riMINn_ciMINn = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y - n_pixel, _keypoints_list_openpose[ii].x - n_pixel);
+          cout << "H_riMINn_ciMINn = " << H_riMINn_ciMINn << endl;
           data_t H_riMINn_ciPLUSn = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y - n_pixel, _keypoints_list_openpose[ii].x + n_pixel);
+          cout << "H_riMINn_ciPLUSn = " << H_riMINn_ciPLUSn << endl;
           data_t H_riPLUSn_ciMINn = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y + n_pixel, _keypoints_list_openpose[ii].x - n_pixel);
+          cout << "H_riPLUSn_ciMINn = " << H_riPLUSn_ciMINn << endl;
           data_t H_riPLUSn_ciPLUSn = _heat_map.at<data_t>(
               _keypoints_list_openpose[ii].y + n_pixel, _keypoints_list_openpose[ii].x + n_pixel);
+          cout << "H_riPLUSn_ciPLUSn = " << H_riPLUSn_ciPLUSn << endl;
 
           data_t H12 = (1.0 / (4 * n_pixel * n_pixel)) *
                        (H_riPLUSn_ciPLUSn - H_riPLUSn_ciMINn -
                         H_riMINn_ciPLUSn + H_riMINn_ciMINn);
+          cout << "H12 = " << H12 << endl;
           data_t H21 = H12;
 
           Eigen::Matrix2f A;
           A << H11, H12, H21, H22;
 
-          Eigen::Matrix2f C = A.inverse();
+          cout << "*A(1,1)  " << A(0,0) << "  A(1,2)  " << A(0,1) << "  A(2,1)  " << A(1,0) << "  A(2,2)  " << A(1,1) << endl;
+
+          Eigen::Matrix2f C = (-A).inverse();
+          // cout << "*C(1,1)  " << C(1,1) << "  C(1,2)  " << C(1,2) << "  C(2,1)  " << C(2,1) << "  C(2,2)  " << C(2,2) << endl;
           _cov2D_vec.push_back(C);
           Eigen::EigenSolver<Eigen::Matrix2f> s(C); // the instance s(C)
                                                     // includes the eigensystem
 
           complex<data_t> D11_tmp = s.eigenvalues()[0];
-          data_t D11 = D11_tmp.real();
+          data_t D11 = D11_tmp.real(); 
+          cout << "D11 = " << D11 << endl;
           complex<data_t> D22_tmp = s.eigenvalues()[1];
           data_t D22 = D22_tmp.real();
+          cout << "D22 = " << D22 << endl;
 
           complex<data_t> V11_tmp = s.eigenvectors()(0, 0);
           data_t V11 = V11_tmp.real();
@@ -1203,8 +1224,8 @@ public:
           data_t V21 = V21_tmp.real();
 
           data_t perc_prob = 0.68; // standard confidence interval
-          data_t xradius = sqrt(-D11 * (-2) * log(1 - perc_prob));
-          data_t yradius = sqrt(-D22 * (-2) * log(1 - perc_prob));
+          data_t xradius = sqrt(D11 * (-2) * log(1 - perc_prob));
+          data_t yradius = sqrt(D22 * (-2) * log(1 - perc_prob));
 
           data_t alpha = atan2(V21, V11);
 
@@ -1269,8 +1290,6 @@ public:
         }
       }
       }
-    }
-
 
     return return_type::success;
   }
@@ -1294,6 +1313,7 @@ public:
       if (_keypoints_list_openpose.size() > 0) { // at least one person
         for (size_t i = 0; i < _cov2D_vec.size(); ++i) {
           Eigen::Matrix2f _cov2D_vec_TMP = _cov2D_vec[i];
+          cout << "cov2D_vec_TMP = " << _cov2D_vec_TMP << endl;
 
           if (!(_keypoints_list_azure[i].x == -1 &&
                 _keypoints_list_azure[i].y == -1 &&
@@ -1301,9 +1321,7 @@ public:
               !(_cov2D_vec_TMP.array() == -1).all()) {
 
             float Z_tmp = _keypoints_list_azure[i].z;
-            float sigma_z =
-                (_keypoints_list_azure[i].z /
-                 1000); // TO DO CHECK A GOOD MODEL 0.015 * Z_tmp + 2;
+            float sigma_z = -0.000000000035541*Z_tmp*Z_tmp*Z_tmp + 0.000000493877878*Z_tmp*Z_tmp - 0.001100245600022*Z_tmp + 1.989206937961068; 
             float variance_z = sigma_z * sigma_z;
 
             Eigen::Matrix<float, 3, 2> J;
@@ -1375,7 +1393,7 @@ public:
               !(_cov2D_vec_TMP.array() == -1).all()) {
 
             float Z_tmp = _keypoints_list_azure[i].z;
-            float sigma_z = 0.015 * Z_tmp + 2; // KINECT AZURE model
+            float sigma_z = -0.000000000035541*Z_tmp*Z_tmp*Z_tmp+0.000000493877878*Z_tmp*Z_tmp - 0.001100245600022*Z_tmp+1.989206937961068; // KINECT AZURE model
             float variance_z = sigma_z * sigma_z;
 
             Eigen::Matrix<float, 3, 2> J;
