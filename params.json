@@ -5,11 +5,12 @@
     "resolution_rgb": "1280x720",
     "fps": 25,
     "dummy": true,
+    "dummy_path": "C:/Users/marco/OneDrive/Desktop/dummy_hpe/20241115_144833_MSAzureKinect_SN000368420812.mkv",
     "debug": {
         "skeleton_from_depth_compute": true,
         "skeleton_from_rgb_compute": true,
         "hessian_compute": true,
-        "cov3D_compute": true,
+        "cov3D_compute": false,
         "consistency_check": false,
         "point_cloud_filter": false,
         "coordinate_transfrom": false,
